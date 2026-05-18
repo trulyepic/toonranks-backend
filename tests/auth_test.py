@@ -1,6 +1,8 @@
+import io
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
+from PIL import Image
 
 from app.main import app
 from app.routes import auth
@@ -34,8 +36,9 @@ class FakeExecuteResult:
 
 
 class FakeAuthSession:
-    def __init__(self, *, execute_result=None):
+    def __init__(self, *, execute_result=None, get_result=None):
         self.execute_result = execute_result or FakeExecuteResult()
+        self.get_result = get_result
         self.added = []
         self.committed = False
         self.flushed = False
@@ -44,6 +47,9 @@ class FakeAuthSession:
 
     async def execute(self, _stmt):
         return self.execute_result
+
+    async def get(self, _model, _id):
+        return self.get_result
 
     def add(self, item):
         self.added.append(item)
@@ -71,8 +77,22 @@ def override_auth_db(session):
     return lambda: app.dependency_overrides.pop(auth.get_db, None)
 
 
+def override_auth_user(user):
+    async def fake_current_user():
+        return user
+
+    app.dependency_overrides[auth.get_current_user] = fake_current_user
+    return lambda: app.dependency_overrides.pop(auth.get_current_user, None)
+
+
 async def fake_verify_captcha(*args, **kwargs):
     return None
+
+
+def make_image_bytes(*, size=(64, 48), image_format="PNG"):
+    buffer = io.BytesIO()
+    Image.new("RGB", size, color=(32, 96, 160)).save(buffer, format=image_format)
+    return buffer.getvalue()
 
 
 def test_signup_creates_unverified_user_with_normalized_email(monkeypatch):
@@ -202,7 +222,13 @@ def test_login_returns_access_token_for_verified_user(monkeypatch):
     assert response.status_code == 200
     assert response.json() == {
         "access_token": "token-for-reader",
-        "user": {"id": 7, "username": "reader", "role": "GENERAL"},
+        "user": {
+            "id": 7,
+            "username": "reader",
+            "role": "GENERAL",
+            "avatar_url": None,
+            "avatar_preset": "blue",
+        },
     }
 
 
@@ -262,3 +288,179 @@ def test_login_rejects_unverified_user(monkeypatch):
 
     assert response.status_code == 403
     assert response.json()["detail"] == "Email not verified"
+
+
+def test_normalize_avatar_image_returns_square_webp():
+    output = auth.normalize_avatar_image(make_image_bytes(size=(80, 40)))
+
+    with Image.open(output) as image:
+        assert image.size == (auth.AVATAR_SIZE, auth.AVATAR_SIZE)
+        assert image.format == "WEBP"
+
+
+def test_upload_my_avatar_normalizes_and_persists_url(monkeypatch):
+    current_user = SimpleNamespace(id=7, username="reader", role="GENERAL")
+    db_user = SimpleNamespace(
+        id=7,
+        username="reader",
+        role="GENERAL",
+        avatar_url=None,
+        avatar_preset=None,
+    )
+    session = FakeAuthSession(get_result=db_user)
+    cleanup_db = override_auth_db(session)
+    cleanup_user = override_auth_user(current_user)
+    uploaded = []
+
+    def fake_upload(fileobj, filename, content_type, folder, subfolder):
+        uploaded.append(
+            {
+                "bytes": fileobj.read(),
+                "filename": filename,
+                "content_type": content_type,
+                "folder": folder,
+                "subfolder": subfolder,
+            }
+        )
+        return "https://cdn.example.com/avatars/7/avatar.webp"
+
+    monkeypatch.setattr(auth, "upload_to_s3", fake_upload)
+
+    try:
+        response = client.post(
+            "/auth/me/avatar",
+            files={"file": ("avatar.png", make_image_bytes(), "image/png")},
+        )
+    finally:
+        cleanup_user()
+        cleanup_db()
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "id": 7,
+        "username": "reader",
+        "role": "GENERAL",
+        "avatar_url": "https://cdn.example.com/avatars/7/avatar.webp",
+        "avatar_preset": "blue",
+    }
+    assert session.committed is True
+    assert uploaded[0]["filename"] == "avatar.webp"
+    assert uploaded[0]["content_type"] == "image/webp"
+    assert uploaded[0]["folder"] == "avatars"
+    assert uploaded[0]["subfolder"] == "7"
+
+    with Image.open(io.BytesIO(uploaded[0]["bytes"])) as image:
+        assert image.size == (auth.AVATAR_SIZE, auth.AVATAR_SIZE)
+        assert image.format == "WEBP"
+
+
+def test_upload_my_avatar_rejects_unsupported_file_without_s3(monkeypatch):
+    current_user = SimpleNamespace(id=7, username="reader", role="GENERAL")
+    session = FakeAuthSession(get_result=current_user)
+    cleanup_db = override_auth_db(session)
+    cleanup_user = override_auth_user(current_user)
+    monkeypatch.setattr(
+        auth,
+        "upload_to_s3",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("S3 called")),
+    )
+
+    try:
+        response = client.post(
+            "/auth/me/avatar",
+            files={"file": ("avatar.txt", b"hello", "text/plain")},
+        )
+    finally:
+        cleanup_user()
+        cleanup_db()
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Unsupported avatar image type"
+    assert session.committed is False
+
+
+def test_select_my_avatar_preset_clears_custom_avatar():
+    current_user = SimpleNamespace(id=7, username="reader", role="GENERAL")
+    db_user = SimpleNamespace(
+        id=7,
+        username="reader",
+        role="GENERAL",
+        avatar_url="https://cdn.example.com/custom.webp",
+        avatar_preset="blue",
+    )
+    session = FakeAuthSession(get_result=db_user)
+    cleanup_db = override_auth_db(session)
+    cleanup_user = override_auth_user(current_user)
+
+    try:
+        response = client.patch(
+            "/auth/me/avatar/preset",
+            json={"avatar_preset": "emerald"},
+        )
+    finally:
+        cleanup_user()
+        cleanup_db()
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "id": 7,
+        "username": "reader",
+        "role": "GENERAL",
+        "avatar_url": None,
+        "avatar_preset": "emerald",
+    }
+    assert db_user.avatar_url is None
+    assert db_user.avatar_preset == "emerald"
+    assert session.committed is True
+
+
+def test_select_my_avatar_preset_rejects_unknown_preset():
+    current_user = SimpleNamespace(id=7, username="reader", role="GENERAL")
+    session = FakeAuthSession(get_result=current_user)
+    cleanup_db = override_auth_db(session)
+    cleanup_user = override_auth_user(current_user)
+
+    try:
+        response = client.patch(
+            "/auth/me/avatar/preset",
+            json={"avatar_preset": "purple"},
+        )
+    finally:
+        cleanup_user()
+        cleanup_db()
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Invalid avatar preset"
+    assert session.committed is False
+
+
+def test_reset_my_avatar_clears_custom_avatar():
+    current_user = SimpleNamespace(id=7, username="reader", role="GENERAL")
+    db_user = SimpleNamespace(
+        id=7,
+        username="reader",
+        role="GENERAL",
+        avatar_url="https://cdn.example.com/custom.webp",
+        avatar_preset=None,
+    )
+    session = FakeAuthSession(get_result=db_user)
+    cleanup_db = override_auth_db(session)
+    cleanup_user = override_auth_user(current_user)
+
+    try:
+        response = client.delete("/auth/me/avatar")
+    finally:
+        cleanup_user()
+        cleanup_db()
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "id": 7,
+        "username": "reader",
+        "role": "GENERAL",
+        "avatar_url": None,
+        "avatar_preset": "blue",
+    }
+    assert db_user.avatar_url is None
+    assert db_user.avatar_preset == "blue"
+    assert session.committed is True

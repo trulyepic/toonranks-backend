@@ -1,35 +1,84 @@
 from fastapi import (APIRouter, Depends, HTTPException,
-                     status, Query, Body)
+                     status, Query, Body, UploadFile, File)
 from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import AsyncSessionLocal
 from app.email_service import send_verification_email
 from app.limiter import limiter
 from app.models.user_model import User
-from app.schemas.user_schemas import UserCreate, UserOut, SignupResponse, UserLogin, ResendVerification, UserAdminOut, UserRoleUpdate
+from app.schemas.user_schemas import (
+    AvatarPresetUpdate,
+    ResendVerification,
+    SignupResponse,
+    UserAdminOut,
+    UserAvatarOut,
+    UserCreate,
+    UserLogin,
+    UserOut,
+    UserRoleUpdate,
+)
 from sqlalchemy.future import select
 from passlib.hash import bcrypt
 from fastapi.responses import JSONResponse
 from fastapi import Request
+from PIL import Image, ImageOps
 
 from app.utils.captcha import verify_captcha
-from app.utils.token_utils import create_access_token
+from app.utils.token_utils import create_access_token, get_current_user
 from app.utils.email_token_utils import verify_email_token, generate_email_token
 from google.oauth2 import id_token
 from google.auth.transport import requests
 from datetime import datetime, timezone
 import os
 import json
+import io
 from urllib.parse import urlencode
 from urllib.request import urlopen
 from jose import JWTError
 from app.deps.admin import require_admin
+from app.s3 import upload_to_s3
 
 router = APIRouter()
+
+DEFAULT_AVATAR_PRESET = "blue"
+ALLOWED_AVATAR_PRESETS = {"blue", "emerald", "amber"}
+ALLOWED_AVATAR_MIMES = {"image/png", "image/jpeg", "image/webp"}
+MAX_AVATAR_BYTES = 5 * 1024 * 1024
+AVATAR_SIZE = 256
 
 async def get_db():
     async with AsyncSessionLocal() as session:
         yield session
+
+
+def user_to_dict(user: User) -> dict:
+    return {
+        "id": user.id,
+        "username": user.username,
+        "role": user.role,
+        "avatar_url": getattr(user, "avatar_url", None),
+        "avatar_preset": getattr(user, "avatar_preset", None) or DEFAULT_AVATAR_PRESET,
+    }
+
+
+def normalize_avatar_image(blob: bytes) -> io.BytesIO:
+    try:
+        with Image.open(io.BytesIO(blob)) as image:
+            image = ImageOps.exif_transpose(image)
+            image = ImageOps.fit(image.convert("RGB"), (AVATAR_SIZE, AVATAR_SIZE))
+            out = io.BytesIO()
+            image.save(out, format="WEBP", quality=88, method=6)
+            out.seek(0)
+            return out
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid avatar image")
+
+
+async def get_user_for_update(current_user: User, db: AsyncSession) -> User:
+    user = await db.get(User, current_user.id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
 
 
 
@@ -61,6 +110,7 @@ async def signup(request: Request, user: UserCreate, db: AsyncSession = Depends(
         password=hashed,
         email=email_norm,           # store normalized email
         is_verified=False,
+        avatar_preset=DEFAULT_AVATAR_PRESET,
         registered_at=datetime.now(timezone.utc),
     )
 
@@ -156,6 +206,7 @@ async def google_oauth(payload: dict, db: AsyncSession = Depends(get_db)):
                 password="",
                 is_verified=True,
                 role="GENERAL",
+                avatar_preset=DEFAULT_AVATAR_PRESET,
                 registered_at=datetime.now(timezone.utc),
             )
             db.add(user)
@@ -166,7 +217,7 @@ async def google_oauth(payload: dict, db: AsyncSession = Depends(get_db)):
 
         return {
             "access_token": access_token,
-            "user": {"id": user.id, "username": user.username, "role": user.role},
+            "user": user_to_dict(user),
         }
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid Google token")
@@ -207,7 +258,7 @@ async def login(request: Request, user: UserLogin, db: AsyncSession = Depends(ge
 
     return JSONResponse({
         "access_token": access_token,
-        "user": {"id": db_user.id, "username": db_user.username, "role": db_user.role}
+        "user": user_to_dict(db_user)
     })
 
 
@@ -330,3 +381,65 @@ async def update_user_role(
     await db.commit()
     await db.refresh(user)
     return user
+
+
+@router.post("/me/avatar", response_model=UserAvatarOut)
+async def upload_my_avatar(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if file.content_type not in ALLOWED_AVATAR_MIMES:
+        raise HTTPException(status_code=400, detail="Unsupported avatar image type")
+
+    blob = await file.read()
+    if not blob:
+        raise HTTPException(status_code=400, detail="Avatar image is empty")
+    if len(blob) > MAX_AVATAR_BYTES:
+        raise HTTPException(status_code=400, detail="Avatar image is too large")
+
+    avatar_url = upload_to_s3(
+        normalize_avatar_image(blob),
+        filename="avatar.webp",
+        content_type="image/webp",
+        folder="avatars",
+        subfolder=str(current_user.id),
+    )
+
+    user = await get_user_for_update(current_user, db)
+    user.avatar_url = avatar_url
+    user.avatar_preset = user.avatar_preset or DEFAULT_AVATAR_PRESET
+    await db.commit()
+    await db.refresh(user)
+    return user_to_dict(user)
+
+
+@router.patch("/me/avatar/preset", response_model=UserAvatarOut)
+async def select_my_avatar_preset(
+    payload: AvatarPresetUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    next_preset = (payload.avatar_preset or "").strip().lower()
+    if next_preset not in ALLOWED_AVATAR_PRESETS:
+        raise HTTPException(status_code=400, detail="Invalid avatar preset")
+
+    user = await get_user_for_update(current_user, db)
+    user.avatar_url = None
+    user.avatar_preset = next_preset
+    await db.commit()
+    await db.refresh(user)
+    return user_to_dict(user)
+
+
+@router.delete("/me/avatar", response_model=UserAvatarOut)
+async def reset_my_avatar(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    user = await get_user_for_update(current_user, db)
+    user.avatar_url = None
+    user.avatar_preset = user.avatar_preset or DEFAULT_AVATAR_PRESET
+    await db.commit()
+    await db.refresh(user)
+    return user_to_dict(user)

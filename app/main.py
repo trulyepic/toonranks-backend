@@ -128,6 +128,31 @@ async def on_startup():
                 await conn.execute(
                     text(
                         """
+                        ALTER TABLE IF EXISTS man_review.users
+                        ADD COLUMN IF NOT EXISTS avatar_url VARCHAR
+                        """
+                    )
+                )
+                await conn.execute(
+                    text(
+                        """
+                        ALTER TABLE IF EXISTS man_review.users
+                        ADD COLUMN IF NOT EXISTS avatar_preset VARCHAR
+                        """
+                    )
+                )
+                await conn.execute(
+                    text(
+                        """
+                        UPDATE man_review.users
+                        SET avatar_preset = 'blue'
+                        WHERE avatar_preset IS NULL
+                        """
+                    )
+                )
+                await conn.execute(
+                    text(
+                        """
                         UPDATE man_review.series
                         SET approval_status = 'APPROVED'
                         WHERE approval_status IS NULL

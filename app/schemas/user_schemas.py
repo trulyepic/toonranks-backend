@@ -19,6 +19,8 @@ class UserOut(BaseModel):
     id: int
     username: str
     role: str
+    avatar_url: Optional[str] = None
+    avatar_preset: Optional[str] = "blue"
 
 class UserAdminOut(UserOut):
     email: Optional[EmailStr] = None
@@ -26,6 +28,16 @@ class UserAdminOut(UserOut):
 
 class UserRoleUpdate(BaseModel):
     role: str
+
+class AvatarPresetUpdate(BaseModel):
+    avatar_preset: str
+
+class UserAvatarOut(BaseModel):
+    id: int
+    username: str
+    role: str
+    avatar_url: Optional[str] = None
+    avatar_preset: str
 
 class SignupResponse(BaseModel):
     message: str
