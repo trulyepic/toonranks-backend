@@ -24,6 +24,7 @@ from app.limiter import limiter
 from app.moderation.profanity import ensure_clean
 
 router = APIRouter(prefix="/forum", tags=["forum"])
+DEFAULT_AVATAR_PRESET = "blue"
 
 
 class LockToggleIn(BaseModel):
@@ -58,6 +59,17 @@ async def _post_heart_bits(db: AsyncSession, post_id: int, viewer_id: Optional[i
 def _is_admin(user: "User") -> bool:
     return (getattr(user, "role", "") or "").upper() == "ADMIN"
 
+
+def _author_profile(user: Optional[User]) -> dict:
+    return {
+        "author_username": getattr(user, "username", None) if user else None,
+        "author_avatar_url": getattr(user, "avatar_url", None) if user else None,
+        "author_avatar_preset": (
+            getattr(user, "avatar_preset", None) if user else None
+        ) or DEFAULT_AVATAR_PRESET,
+    }
+
+
 async def _post_to_plain_dict(p: ForumPost, db: AsyncSession, viewer: Optional["User"]=None) -> dict:
     refs = await db.execute(
         select(ForumSeriesRef, Series)
@@ -74,17 +86,17 @@ async def _post_to_plain_dict(p: ForumPost, db: AsyncSession, viewer: Optional["
             "status": s.status,
         })
 
-    author_username = None
+    author = None
     if p.author_id:
-        u = await db.get(User, p.author_id)
-        author_username = getattr(u, "username", None) if u else None
+        author = await db.get(User, p.author_id)
 
     heart_count, viewer_has = await _post_heart_bits(db, p.id, getattr(viewer, "id", None))
+    author_profile = _author_profile(author)
 
     # Always include parent_id; use 0 for top-level
     return {
         "id": p.id,
-        "author_username": author_username,
+        **author_profile,
         "content_markdown": p.content_markdown,
         "created_at": str(p.created_at),
         "updated_at": str(p.updated_at),
@@ -123,10 +135,9 @@ async def get_current_user_optional(
 # Mappers
 # ------------------------------
 async def _thread_to_out(t: ForumThread, db: AsyncSession) -> ForumThreadOut:
-    author_username: Optional[str] = None
+    author = None
     if t.author_id:
-        u = await db.get(User, t.author_id)
-        author_username = getattr(u, "username", None) if u else None
+        author = await db.get(User, t.author_id)
 
     refs = await db.execute(
         select(ForumSeriesRef, Series)
@@ -147,7 +158,7 @@ async def _thread_to_out(t: ForumThread, db: AsyncSession) -> ForumThreadOut:
     return ForumThreadOut(
         id=t.id,
         title=t.title,
-        author_username=author_username,
+        **_author_profile(author),
         created_at=str(t.created_at),
         updated_at=str(t.updated_at),
         post_count=t.post_count or 0,
@@ -174,16 +185,15 @@ async def _post_to_out(p: ForumPost, db: AsyncSession, viewer: Optional["User"]=
         for (_ref, s) in refs.all()
     ]
 
-    author_username: Optional[str] = None
+    author = None
     if p.author_id:
-        u = await db.get(User, p.author_id)
-        author_username = getattr(u, "username", None) if u else None
+        author = await db.get(User, p.author_id)
 
     heart_count, viewer_has = await _post_heart_bits(db, p.id, getattr(viewer, "id", None))
 
     return ForumPostOut(
         id=p.id,
-        author_username=author_username,
+        **_author_profile(author),
         content_markdown=p.content_markdown,
         created_at=str(p.created_at),
         updated_at=str(p.updated_at),
