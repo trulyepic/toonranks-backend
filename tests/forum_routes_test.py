@@ -158,7 +158,13 @@ def test_create_thread_creates_thread_first_post_and_series_refs():
             FakeExecuteResult(scalar_one=0),
             FakeExecuteResult(rows=[]),
         ],
-        get_results={(User, 10): SimpleNamespace(username="reader")},
+        get_results={
+            (User, 10): SimpleNamespace(
+                username="reader",
+                avatar_url="https://cdn.example.com/avatar.webp",
+                avatar_preset="emerald",
+            )
+        },
     )
     cleanup = override_forum_dependencies(session)
 
@@ -177,6 +183,8 @@ def test_create_thread_creates_thread_first_post_and_series_refs():
     assert response.status_code == 200
     assert response.json()["title"] == "Favorite fights"
     assert response.json()["author_username"] == "reader"
+    assert response.json()["author_avatar_url"] == "https://cdn.example.com/avatar.webp"
+    assert response.json()["author_avatar_preset"] == "emerald"
     assert session.flushed is True
     assert session.committed is True
     assert [type(item) for item in session.added] == [
@@ -229,6 +237,39 @@ def test_create_post_rejects_locked_thread_for_non_admin_user():
     assert response.json()["detail"] == "Thread is locked"
     assert session.added == []
     assert session.committed is False
+
+
+def test_create_post_returns_author_avatar_metadata():
+    session = FakeForumSession(
+        results=[
+            FakeExecuteResult(rows=[]),
+            FakeExecuteResult(scalar_one=0),
+        ],
+        get_results={
+            (ForumThread, 1): thread_object(),
+            (User, 10): SimpleNamespace(
+                username="reader",
+                avatar_url=None,
+                avatar_preset="amber",
+            ),
+        },
+    )
+    cleanup = override_forum_dependencies(session)
+
+    try:
+        response = client.post(
+            "/forum/threads/1/posts",
+            json={"content_markdown": "This chapter worked well."},
+        )
+    finally:
+        cleanup()
+
+    assert response.status_code == 200
+    assert response.json()["author_username"] == "reader"
+    assert response.json()["author_avatar_url"] is None
+    assert response.json()["author_avatar_preset"] == "amber"
+    assert session.flushed is True
+    assert session.committed is True
 
 
 def test_delete_thread_rejects_non_owner_non_admin_user():
