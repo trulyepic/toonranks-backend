@@ -13,6 +13,8 @@ class User(Base):
     role = Column(String, default="GENERAL")  # GENERAL, CONTRIBUTOR, or ADMIN
     email = Column(String, unique=True, index=True, nullable=True)
     is_verified = Column(Boolean, default=False, nullable=False, server_default="false")
+    avatar_url = Column(String, nullable=True)
+    avatar_preset = Column(String, nullable=True, default="blue")
 
     registered_at = Column(DateTime(timezone=True), nullable=True)
 
