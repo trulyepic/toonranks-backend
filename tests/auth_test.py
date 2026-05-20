@@ -1,9 +1,12 @@
 import io
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlparse
 
 from fastapi.testclient import TestClient
 from PIL import Image
 
+from app.models.mobile_auth_code import MobileAuthCode
 from app.main import app
 from app.routes import auth
 
@@ -288,6 +291,177 @@ def test_login_rejects_unverified_user(monkeypatch):
 
     assert response.status_code == 403
     assert response.json()["detail"] == "Email not verified"
+
+
+def test_create_mobile_auth_code_returns_deep_link_callback():
+    current_user = SimpleNamespace(id=7, username="reader", role="GENERAL")
+    session = FakeAuthSession()
+    cleanup_db = override_auth_db(session)
+    cleanup_user = override_auth_user(current_user)
+
+    try:
+        response = client.post(
+            "/auth/mobile-code",
+            json={
+                "redirect_uri": "toonranks://auth/callback",
+                "state": "state-123",
+            },
+        )
+    finally:
+        cleanup_user()
+        cleanup_db()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["expires_in"] == auth.MOBILE_AUTH_CODE_EXPIRE_SECONDS
+    assert body["code"]
+    assert body["redirect_url"].startswith("toonranks://auth/callback?")
+
+    parsed = urlparse(body["redirect_url"])
+    params = parse_qs(parsed.query)
+    assert f"{parsed.scheme}://{parsed.netloc}{parsed.path}" == "toonranks://auth/callback"
+    assert params["code"] == [body["code"]]
+    assert params["state"] == ["state-123"]
+
+    assert session.committed is True
+    assert len(session.added) == 1
+    stored = session.added[0]
+    assert isinstance(stored, MobileAuthCode)
+    assert stored.user_id == 7
+    assert stored.redirect_uri == "toonranks://auth/callback"
+    assert stored.state == "state-123"
+    assert stored.code_hash == auth.hash_mobile_auth_code(body["code"])
+    assert stored.code_hash != body["code"]
+
+
+def test_create_mobile_auth_code_rejects_unknown_redirect_uri():
+    current_user = SimpleNamespace(id=7, username="reader", role="GENERAL")
+    session = FakeAuthSession()
+    cleanup_db = override_auth_db(session)
+    cleanup_user = override_auth_user(current_user)
+
+    try:
+        response = client.post(
+            "/auth/mobile-code",
+            json={
+                "redirect_uri": "https://evil.example/callback",
+                "state": "state-123",
+            },
+        )
+    finally:
+        cleanup_user()
+        cleanup_db()
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Invalid mobile redirect URI"
+    assert session.added == []
+    assert session.committed is False
+
+
+def test_exchange_mobile_auth_code_returns_token_and_marks_code_used(monkeypatch):
+    auth_code = SimpleNamespace(
+        user_id=7,
+        code_hash=auth.hash_mobile_auth_code("mobile-code"),
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        used_at=None,
+    )
+    db_user = SimpleNamespace(
+        id=7,
+        username="reader",
+        role="CONTRIBUTOR",
+        avatar_url="https://cdn.example.com/avatar.webp",
+        avatar_preset="emerald",
+    )
+    session = FakeAuthSession(
+        execute_result=FakeExecuteResult(one=auth_code),
+        get_result=db_user,
+    )
+    cleanup = override_auth_db(session)
+    monkeypatch.setattr(auth, "create_access_token", lambda user: f"token-for-{user.username}")
+
+    try:
+        response = client.post("/auth/mobile-token", json={"code": "mobile-code"})
+    finally:
+        cleanup()
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "access_token": "token-for-reader",
+        "user": {
+            "id": 7,
+            "username": "reader",
+            "role": "CONTRIBUTOR",
+            "avatar_url": "https://cdn.example.com/avatar.webp",
+            "avatar_preset": "emerald",
+        },
+    }
+    assert auth_code.used_at is not None
+    assert session.committed is True
+
+
+def test_exchange_mobile_auth_code_rejects_reused_code(monkeypatch):
+    auth_code = SimpleNamespace(
+        user_id=7,
+        code_hash=auth.hash_mobile_auth_code("mobile-code"),
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        used_at=datetime.now(timezone.utc),
+    )
+    session = FakeAuthSession(execute_result=FakeExecuteResult(one=auth_code))
+    cleanup = override_auth_db(session)
+    monkeypatch.setattr(
+        auth,
+        "create_access_token",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("token created")),
+    )
+
+    try:
+        response = client.post("/auth/mobile-token", json={"code": "mobile-code"})
+    finally:
+        cleanup()
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Invalid or expired mobile auth code"
+    assert session.committed is False
+
+
+def test_exchange_mobile_auth_code_rejects_expired_code(monkeypatch):
+    auth_code = SimpleNamespace(
+        user_id=7,
+        code_hash=auth.hash_mobile_auth_code("mobile-code"),
+        expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+        used_at=None,
+    )
+    session = FakeAuthSession(execute_result=FakeExecuteResult(one=auth_code))
+    cleanup = override_auth_db(session)
+    monkeypatch.setattr(
+        auth,
+        "create_access_token",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("token created")),
+    )
+
+    try:
+        response = client.post("/auth/mobile-token", json={"code": "mobile-code"})
+    finally:
+        cleanup()
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Invalid or expired mobile auth code"
+    assert auth_code.used_at is None
+    assert session.committed is False
+
+
+def test_exchange_mobile_auth_code_rejects_unknown_code():
+    session = FakeAuthSession(execute_result=FakeExecuteResult(one=None))
+    cleanup = override_auth_db(session)
+
+    try:
+        response = client.post("/auth/mobile-token", json={"code": "missing-code"})
+    finally:
+        cleanup()
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Invalid or expired mobile auth code"
+    assert session.committed is False
 
 
 def test_normalize_avatar_image_returns_square_webp():

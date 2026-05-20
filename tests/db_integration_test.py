@@ -19,6 +19,7 @@ MODEL_MODULES = [
     "app.models.forum_media_model",
     "app.models.forum_model",
     "app.models.issue",
+    "app.models.mobile_auth_code",
     "app.models.reading_list",
     "app.models.series_detail",
     "app.models.series_model",

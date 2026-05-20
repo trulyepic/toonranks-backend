@@ -22,19 +22,24 @@ from passlib.hash import bcrypt
 from fastapi.responses import JSONResponse
 from fastapi import Request
 from PIL import Image, ImageOps
+from pydantic import BaseModel
 
+from app.models.mobile_auth_code import MobileAuthCode
 from app.utils.captcha import verify_captcha
 from app.utils.token_utils import create_access_token, get_current_user
 from app.utils.email_token_utils import verify_email_token, generate_email_token
 from google.oauth2 import id_token
 from google.auth.transport import requests
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import os
 import json
 import io
+import hashlib
+import secrets
 from urllib.parse import urlencode
 from urllib.request import urlopen
 from jose import JWTError
+from typing import Optional
 from app.deps.admin import require_admin
 from app.s3 import upload_to_s3
 
@@ -45,6 +50,17 @@ ALLOWED_AVATAR_PRESETS = {"blue", "emerald", "amber"}
 ALLOWED_AVATAR_MIMES = {"image/png", "image/jpeg", "image/webp"}
 MAX_AVATAR_BYTES = 5 * 1024 * 1024
 AVATAR_SIZE = 256
+MOBILE_AUTH_CODE_EXPIRE_SECONDS = 5 * 60
+ALLOWED_MOBILE_AUTH_REDIRECT_URIS = {"toonranks://auth/callback"}
+
+
+class MobileAuthCodeCreate(BaseModel):
+    redirect_uri: str
+    state: Optional[str] = None
+
+
+class MobileAuthTokenExchange(BaseModel):
+    code: str
 
 async def get_db():
     async with AsyncSessionLocal() as session:
@@ -74,11 +90,98 @@ def normalize_avatar_image(blob: bytes) -> io.BytesIO:
         raise HTTPException(status_code=400, detail="Invalid avatar image")
 
 
+def hash_mobile_auth_code(code: str) -> str:
+    return hashlib.sha256(code.encode("utf-8")).hexdigest()
+
+
+def is_allowed_mobile_redirect_uri(redirect_uri: str) -> bool:
+    return redirect_uri in ALLOWED_MOBILE_AUTH_REDIRECT_URIS
+
+
+def mobile_auth_code_expired(expires_at: datetime) -> bool:
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    return expires_at <= datetime.now(timezone.utc)
+
+
 async def get_user_for_update(current_user: User, db: AsyncSession) -> User:
     user = await db.get(User, current_user.id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     return user
+
+
+@router.post("/mobile-code")
+async def create_mobile_auth_code(
+    payload: MobileAuthCodeCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    redirect_uri = payload.redirect_uri.strip()
+    if not is_allowed_mobile_redirect_uri(redirect_uri):
+        raise HTTPException(status_code=400, detail="Invalid mobile redirect URI")
+
+    code = secrets.token_urlsafe(32)
+    expires_at = datetime.now(timezone.utc) + timedelta(
+        seconds=MOBILE_AUTH_CODE_EXPIRE_SECONDS
+    )
+    db.add(
+        MobileAuthCode(
+            user_id=current_user.id,
+            code_hash=hash_mobile_auth_code(code),
+            redirect_uri=redirect_uri,
+            state=payload.state,
+            expires_at=expires_at,
+        )
+    )
+    await db.commit()
+
+    callback_params = {"code": code}
+    if payload.state:
+        callback_params["state"] = payload.state
+
+    return {
+        "code": code,
+        "expires_in": MOBILE_AUTH_CODE_EXPIRE_SECONDS,
+        "redirect_url": f"{redirect_uri}?{urlencode(callback_params)}",
+    }
+
+
+@router.post("/mobile-token")
+async def exchange_mobile_auth_code(
+    payload: MobileAuthTokenExchange,
+    db: AsyncSession = Depends(get_db),
+):
+    code = payload.code.strip()
+    if not code:
+        raise HTTPException(status_code=400, detail="Invalid mobile auth code")
+
+    result = await db.execute(
+        select(MobileAuthCode).where(
+            MobileAuthCode.code_hash == hash_mobile_auth_code(code)
+        )
+    )
+    auth_code = result.scalars().first()
+
+    if (
+        not auth_code
+        or auth_code.used_at is not None
+        or mobile_auth_code_expired(auth_code.expires_at)
+    ):
+        raise HTTPException(status_code=400, detail="Invalid or expired mobile auth code")
+
+    user = await db.get(User, auth_code.user_id)
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid or expired mobile auth code")
+
+    access_token = create_access_token(user)
+    auth_code.used_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    return {
+        "access_token": access_token,
+        "user": user_to_dict(user),
+    }
 
 
 
