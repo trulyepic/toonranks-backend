@@ -161,6 +161,7 @@ def test_create_thread_creates_thread_first_post_and_series_refs():
         get_results={
             (User, 10): SimpleNamespace(
                 username="reader",
+                role="CONTRIBUTOR",
                 avatar_url="https://cdn.example.com/avatar.webp",
                 avatar_preset="emerald",
             )
@@ -183,6 +184,7 @@ def test_create_thread_creates_thread_first_post_and_series_refs():
     assert response.status_code == 200
     assert response.json()["title"] == "Favorite fights"
     assert response.json()["author_username"] == "reader"
+    assert response.json()["author_role"] == "CONTRIBUTOR"
     assert response.json()["author_avatar_url"] == "https://cdn.example.com/avatar.webp"
     assert response.json()["author_avatar_preset"] == "emerald"
     assert session.flushed is True
@@ -249,6 +251,7 @@ def test_create_post_returns_author_avatar_metadata():
             (ForumThread, 1): thread_object(),
             (User, 10): SimpleNamespace(
                 username="reader",
+                role="ADMIN",
                 avatar_url=None,
                 avatar_preset="amber",
             ),
@@ -266,6 +269,7 @@ def test_create_post_returns_author_avatar_metadata():
 
     assert response.status_code == 200
     assert response.json()["author_username"] == "reader"
+    assert response.json()["author_role"] == "ADMIN"
     assert response.json()["author_avatar_url"] is None
     assert response.json()["author_avatar_preset"] == "amber"
     assert session.flushed is True

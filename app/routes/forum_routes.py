@@ -63,6 +63,7 @@ def _is_admin(user: "User") -> bool:
 def _author_profile(user: Optional[User]) -> dict:
     return {
         "author_username": getattr(user, "username", None) if user else None,
+        "author_role": getattr(user, "role", None) if user else None,
         "author_avatar_url": getattr(user, "avatar_url", None) if user else None,
         "author_avatar_preset": (
             getattr(user, "avatar_preset", None) if user else None
