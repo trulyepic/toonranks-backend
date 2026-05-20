@@ -15,6 +15,7 @@ class SeriesRefOut(BaseModel):
 class ForumPostOut(BaseModel):
     id: int
     author_username: Optional[str] = None
+    author_role: Optional[str] = None
     author_avatar_url: Optional[str] = None
     author_avatar_preset: Optional[str] = "blue"
     content_markdown: str
@@ -30,6 +31,7 @@ class ForumThreadOut(BaseModel):
     id: int
     title: str
     author_username: Optional[str] = None
+    author_role: Optional[str] = None
     author_avatar_url: Optional[str] = None
     author_avatar_preset: Optional[str] = "blue"
     created_at: str
