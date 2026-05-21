@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response,
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, delete
-from typing import Optional, List
+from typing import Literal, Optional, List
 
 from app.database import get_async_session
 from app.models.forum_model import ForumThread, ForumPost, ForumSeriesRef, ForumReaction
@@ -25,32 +25,70 @@ from app.moderation.profanity import ensure_clean
 
 router = APIRouter(prefix="/forum", tags=["forum"])
 DEFAULT_AVATAR_PRESET = "blue"
+UPVOTE = "UPVOTE"
+DOWNVOTE = "DOWNVOTE"
+LEGACY_HEART = "HEART"
+POSITIVE_REACTION_KINDS = (UPVOTE, LEGACY_HEART)
 
 
 class LockToggleIn(BaseModel):
     locked: bool
+
+class ForumVoteIn(BaseModel):
+    vote: Optional[Literal["UPVOTE", "DOWNVOTE"]] = None
+
+
+class ForumVoteOut(BaseModel):
+    viewer_vote: Optional[Literal["UPVOTE", "DOWNVOTE"]] = None
+    upvote_count: int
+    downvote_count: int
+
 
 class HeartToggleOut(BaseModel):
     hearted: bool
     count: int
 
 
-async def _post_heart_bits(db: AsyncSession, post_id: int, viewer_id: Optional[int]) -> tuple[int, bool]:
-    # count hearts
-    count_stmt = select(func.count(ForumReaction.id)).where(
-        ForumReaction.post_id == post_id, ForumReaction.kind == "HEART"
-    )
-    heart_count = int((await db.execute(count_stmt)).scalar_one() or 0)
+def _normalize_vote_kind(kind: Optional[str]) -> Optional[str]:
+    if kind == LEGACY_HEART:
+        return UPVOTE
+    if kind in {UPVOTE, DOWNVOTE}:
+        return kind
+    return None
 
-    has = False
+
+async def _post_vote_bits(
+    db: AsyncSession, post_id: int, viewer_id: Optional[int]
+) -> tuple[int, int, Optional[str]]:
+    upvote_stmt = select(func.count(ForumReaction.id)).where(
+        ForumReaction.post_id == post_id, ForumReaction.kind.in_(POSITIVE_REACTION_KINDS)
+    )
+    upvote_count = int((await db.execute(upvote_stmt)).scalar_one() or 0)
+
+    downvote_stmt = select(func.count(ForumReaction.id)).where(
+        ForumReaction.post_id == post_id, ForumReaction.kind == DOWNVOTE
+    )
+    downvote_count = int((await db.execute(downvote_stmt)).scalar_one() or 0)
+
+    viewer_vote = None
     if viewer_id:
-        has_stmt = select(func.count(ForumReaction.id)).where(
-            ForumReaction.post_id == post_id,
-            ForumReaction.user_id == viewer_id,
-            ForumReaction.kind == "HEART",
+        viewer_stmt = (
+            select(ForumReaction)
+            .where(
+                ForumReaction.post_id == post_id,
+                ForumReaction.user_id == viewer_id,
+            )
+            .limit(1)
         )
-        has = (await db.execute(has_stmt)).scalar_one() > 0
-    return heart_count, has
+        reaction = (await db.execute(viewer_stmt)).scalars().first()
+        viewer_vote = _normalize_vote_kind(getattr(reaction, "kind", None))
+
+    return upvote_count, downvote_count, viewer_vote
+
+
+async def _post_heart_bits(db: AsyncSession, post_id: int, viewer_id: Optional[int]) -> tuple[int, bool]:
+    upvote_count, _downvote_count, viewer_vote = await _post_vote_bits(db, post_id, viewer_id)
+    return upvote_count, viewer_vote == UPVOTE
 
 
 # ------------------------------
@@ -91,10 +129,13 @@ async def _post_to_plain_dict(p: ForumPost, db: AsyncSession, viewer: Optional["
     if p.author_id:
         author = await db.get(User, p.author_id)
 
-    heart_count, viewer_has = await _post_heart_bits(db, p.id, getattr(viewer, "id", None))
+    upvote_count, downvote_count, viewer_vote = await _post_vote_bits(
+        db, p.id, getattr(viewer, "id", None)
+    )
     author_profile = _author_profile(author)
 
     # Always include parent_id; use 0 for top-level
+    resolved_upvotes = int(getattr(p, "upvote_count", upvote_count) or upvote_count)
     return {
         "id": p.id,
         **author_profile,
@@ -103,8 +144,11 @@ async def _post_to_plain_dict(p: ForumPost, db: AsyncSession, viewer: Optional["
         "updated_at": str(p.updated_at),
         "series_refs": srefs,
         "parent_id": int(p.parent_id) if p.parent_id is not None else 0,
-        "heart_count": int(getattr(p, "heart_count", heart_count) or heart_count),
-        "viewer_has_hearted": bool(viewer_has),
+        "upvote_count": resolved_upvotes,
+        "downvote_count": int(getattr(p, "downvote_count", downvote_count) or downvote_count),
+        "viewer_vote": viewer_vote,
+        "heart_count": resolved_upvotes,
+        "viewer_has_hearted": viewer_vote == UPVOTE,
     }
 
 def dump_model(m):
@@ -190,7 +234,10 @@ async def _post_to_out(p: ForumPost, db: AsyncSession, viewer: Optional["User"]=
     if p.author_id:
         author = await db.get(User, p.author_id)
 
-    heart_count, viewer_has = await _post_heart_bits(db, p.id, getattr(viewer, "id", None))
+    upvote_count, downvote_count, viewer_vote = await _post_vote_bits(
+        db, p.id, getattr(viewer, "id", None)
+    )
+    resolved_upvotes = int(getattr(p, "upvote_count", upvote_count) or upvote_count)
 
     return ForumPostOut(
         id=p.id,
@@ -200,8 +247,11 @@ async def _post_to_out(p: ForumPost, db: AsyncSession, viewer: Optional["User"]=
         updated_at=str(p.updated_at),
         series_refs=srefs,
         parent_id=p.parent_id if p.parent_id is not None else 0,
-        heart_count=int(getattr(p, "heart_count", heart_count) or heart_count),
-        viewer_has_hearted=bool(viewer_has),
+        upvote_count=resolved_upvotes,
+        downvote_count=int(getattr(p, "downvote_count", downvote_count) or downvote_count),
+        viewer_vote=viewer_vote,
+        heart_count=resolved_upvotes,
+        viewer_has_hearted=viewer_vote == UPVOTE,
     )
 
 # ------------------------------
@@ -909,6 +959,30 @@ async def toggle_heart(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_async_session),
 ):
+    vote_result = await set_post_vote(
+        request=request,
+        thread_id=thread_id,
+        post_id=post_id,
+        payload=ForumVoteIn(vote=UPVOTE),
+        user=user,
+        db=db,
+    )
+    return HeartToggleOut(
+        hearted=vote_result.viewer_vote == UPVOTE,
+        count=vote_result.upvote_count,
+    )
+
+
+@router.post("/threads/{thread_id}/posts/{post_id}/vote", response_model=ForumVoteOut)
+@limiter.limit("30/minute;1000/day")
+async def set_post_vote(
+    request: Request,
+    thread_id: int,
+    post_id: int,
+    payload: ForumVoteIn,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_session),
+):
     post = await db.get(ForumPost, post_id)
     if not post or post.thread_id != thread_id:
         raise HTTPException(status_code=404, detail="Post not found")
@@ -921,37 +995,47 @@ async def toggle_heart(
             .where(
                 ForumReaction.post_id == post_id,
                 ForumReaction.user_id == user.id,
-                ForumReaction.kind == "HEART",
             )
             .limit(1)
         )
     ).scalars().first()
 
-    if existing:
-        # remove
-        await db.delete(existing)
-        # denorm
-        if hasattr(post, "heart_count") and post.heart_count is not None:
-            post.heart_count = max(0, int(post.heart_count) - 1)
-        await db.commit()
-        # count
-        count_stmt = select(func.count(ForumReaction.id)).where(
-            ForumReaction.post_id == post_id, ForumReaction.kind == "HEART"
-        )
-        count = int((await db.execute(count_stmt)).scalar_one() or 0)
-        return HeartToggleOut(hearted=False, count=count)
-    else:
-        # add
-        db.add(ForumReaction(post_id=post_id, user_id=user.id, kind="HEART"))
-        # denorm
-        if hasattr(post, "heart_count") and post.heart_count is not None:
-            post.heart_count = int(post.heart_count) + 1
-        await db.commit()
-        count_stmt = select(func.count(ForumReaction.id)).where(
-            ForumReaction.post_id == post_id, ForumReaction.kind == "HEART"
-        )
-        count = int((await db.execute(count_stmt)).scalar_one() or 0)
-        return HeartToggleOut(hearted=True, count=count)
+    requested_vote = payload.vote
+    existing_vote = _normalize_vote_kind(getattr(existing, "kind", None))
 
+    if requested_vote is None or existing_vote == requested_vote:
+        viewer_vote = None
+        if existing:
+            await db.delete(existing)
+    elif existing:
+        existing.kind = requested_vote
+        viewer_vote = requested_vote
+    else:
+        db.add(ForumReaction(post_id=post_id, user_id=user.id, kind=requested_vote))
+        viewer_vote = requested_vote
+
+    upvote_count = int(getattr(post, "upvote_count", 0) or 0)
+    downvote_count = int(getattr(post, "downvote_count", 0) or 0)
+
+    if existing_vote == UPVOTE:
+        upvote_count = max(0, upvote_count - 1)
+    elif existing_vote == DOWNVOTE:
+        downvote_count = max(0, downvote_count - 1)
+
+    if viewer_vote == UPVOTE:
+        upvote_count += 1
+    elif viewer_vote == DOWNVOTE:
+        downvote_count += 1
+
+    post.upvote_count = upvote_count
+    post.downvote_count = downvote_count
+    post.heart_count = upvote_count
+    await db.commit()
+
+    return ForumVoteOut(
+        viewer_vote=viewer_vote,
+        upvote_count=upvote_count,
+        downvote_count=downvote_count,
+    )
 
 
