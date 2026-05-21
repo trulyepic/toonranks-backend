@@ -94,6 +94,10 @@ class FakeForumSession:
             item.latest_first = False
         if hasattr(item, "heart_count") and item.heart_count is None:
             item.heart_count = 0
+        if hasattr(item, "upvote_count") and item.upvote_count is None:
+            item.upvote_count = 0
+        if hasattr(item, "downvote_count") and item.downvote_count is None:
+            item.downvote_count = 0
 
 
 def thread_object(**overrides):
@@ -122,6 +126,8 @@ def post_object(**overrides):
         "created_at": NOW,
         "updated_at": NOW,
         "heart_count": 0,
+        "upvote_count": 0,
+        "downvote_count": 0,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -246,6 +252,7 @@ def test_create_post_returns_author_avatar_metadata():
         results=[
             FakeExecuteResult(rows=[]),
             FakeExecuteResult(scalar_one=0),
+            FakeExecuteResult(scalar_one=0),
         ],
         get_results={
             (ForumThread, 1): thread_object(),
@@ -293,13 +300,102 @@ def test_delete_thread_rejects_non_owner_non_admin_user():
     assert session.committed is False
 
 
-def test_toggle_heart_adds_reaction_and_returns_count():
-    post = post_object(heart_count=0)
+def test_set_post_vote_adds_upvote_and_returns_counts():
+    post = post_object(upvote_count=0, downvote_count=0, heart_count=0)
     session = FakeForumSession(
-        results=[
-            FakeExecuteResult(first=None),
-            FakeExecuteResult(scalar_one=1),
-        ],
+        results=[FakeExecuteResult(first=None)],
+        get_results={(ForumPost, 5): post},
+    )
+    cleanup = override_forum_dependencies(session)
+
+    try:
+        response = client.post(
+            "/forum/threads/1/posts/5/vote",
+            json={"vote": "UPVOTE"},
+        )
+    finally:
+        cleanup()
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "viewer_vote": "UPVOTE",
+        "upvote_count": 1,
+        "downvote_count": 0,
+    }
+    assert session.committed is True
+    assert len(session.added) == 1
+    assert isinstance(session.added[0], ForumReaction)
+    assert session.added[0].post_id == 5
+    assert session.added[0].user_id == 10
+    assert session.added[0].kind == "UPVOTE"
+    assert post.upvote_count == 1
+    assert post.downvote_count == 0
+    assert post.heart_count == 1
+
+
+def test_set_post_vote_switches_upvote_to_downvote():
+    post = post_object(upvote_count=1, downvote_count=0, heart_count=1)
+    existing = ForumReaction(post_id=5, user_id=10, kind="UPVOTE")
+    session = FakeForumSession(
+        results=[FakeExecuteResult(first=existing)],
+        get_results={(ForumPost, 5): post},
+    )
+    cleanup = override_forum_dependencies(session)
+
+    try:
+        response = client.post(
+            "/forum/threads/1/posts/5/vote",
+            json={"vote": "DOWNVOTE"},
+        )
+    finally:
+        cleanup()
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "viewer_vote": "DOWNVOTE",
+        "upvote_count": 0,
+        "downvote_count": 1,
+    }
+    assert existing.kind == "DOWNVOTE"
+    assert session.deleted == []
+    assert post.upvote_count == 0
+    assert post.downvote_count == 1
+    assert post.heart_count == 0
+
+
+def test_set_post_vote_toggles_same_vote_off():
+    post = post_object(upvote_count=1, downvote_count=0, heart_count=1)
+    existing = ForumReaction(post_id=5, user_id=10, kind="UPVOTE")
+    session = FakeForumSession(
+        results=[FakeExecuteResult(first=existing)],
+        get_results={(ForumPost, 5): post},
+    )
+    cleanup = override_forum_dependencies(session)
+
+    try:
+        response = client.post(
+            "/forum/threads/1/posts/5/vote",
+            json={"vote": "UPVOTE"},
+        )
+    finally:
+        cleanup()
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "viewer_vote": None,
+        "upvote_count": 0,
+        "downvote_count": 0,
+    }
+    assert session.deleted == [existing]
+    assert post.upvote_count == 0
+    assert post.downvote_count == 0
+    assert post.heart_count == 0
+
+
+def test_toggle_heart_compatibility_maps_to_upvote():
+    post = post_object(upvote_count=0, downvote_count=0, heart_count=0)
+    session = FakeForumSession(
+        results=[FakeExecuteResult(first=None)],
         get_results={(ForumPost, 5): post},
     )
     cleanup = override_forum_dependencies(session)
@@ -311,9 +407,3 @@ def test_toggle_heart_adds_reaction_and_returns_count():
 
     assert response.status_code == 200
     assert response.json() == {"hearted": True, "count": 1}
-    assert session.committed is True
-    assert len(session.added) == 1
-    assert isinstance(session.added[0], ForumReaction)
-    assert session.added[0].post_id == 5
-    assert session.added[0].user_id == 10
-    assert post.heart_count == 1

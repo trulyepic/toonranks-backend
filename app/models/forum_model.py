@@ -88,7 +88,11 @@ class ForumPost(Base):
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    # Legacy heart_count is kept during the web/mobile transition. New clients
+    # should use upvote_count/downvote_count and ForumReaction.kind.
     heart_count = Column(Integer, nullable=False, server_default="0")
+    upvote_count = Column(Integer, nullable=False, server_default="0")
+    downvote_count = Column(Integer, nullable=False, server_default="0")
 
     # relationships
     thread = relationship("ForumThread", back_populates="posts")
@@ -160,6 +164,6 @@ class ForumReaction(Base):
         nullable=False,
         index=True,
     )
-    # single MVP reaction type ("HEART"), keep extensible
-    kind = Column(String(20), nullable=False, server_default="HEART")
+    # Valid values: UPVOTE, DOWNVOTE. Legacy HEART rows should be migrated to UPVOTE.
+    kind = Column(String(20), nullable=False, server_default="UPVOTE")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)

@@ -23,6 +23,9 @@ class ForumPostOut(BaseModel):
     updated_at: str
     series_refs: List[SeriesRefOut] = []
     parent_id: Optional[int] = None
+    upvote_count: int = 0
+    downvote_count: int = 0
+    viewer_vote: Optional[str] = None
     heart_count: int = 0
     viewer_has_hearted: bool = False
 
