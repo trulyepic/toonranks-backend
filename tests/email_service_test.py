@@ -55,3 +55,22 @@ def test_build_verification_email_requires_from_email(monkeypatch):
         module._build_verification_email("reader@example.com", "test-token")
 
     assert str(exc_info.value) == "FROM_EMAIL is required to send verification email"
+
+
+def test_build_password_reset_email_includes_plain_text_and_html_parts(monkeypatch):
+    module = reload_email_service(monkeypatch)
+
+    message = module._build_password_reset_email("reader@example.com", "reset-token")
+    body = message.get_body(preferencelist=("plain",)).get_content()
+    html = message.get_body(preferencelist=("html",)).get_content()
+
+    assert message["From"] == "Toon Ranks <support@toonranks.com>"
+    assert message["Reply-To"] == "support@toonranks.com"
+    assert message["To"] == "reader@example.com"
+    assert message["Subject"] == "Reset your Toon Ranks password"
+    assert "https://www.toonranks.com/reset-password?token=reset-token" in body
+    assert "This link expires in 30 minutes." in body
+    assert "Reset your password" in html
+    assert "Reset password" in html
+    assert "This reset link expires in 30 minutes." in html
+    assert "https://www.toonranks.com/reset-password?token=reset-token" in html

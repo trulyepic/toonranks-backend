@@ -39,3 +39,36 @@ def test_verify_email_token_rejects_token_signed_with_different_secret(monkeypat
 
     assert exc_info.value.status_code == 400
     assert exc_info.value.detail == "Invalid or expired token"
+
+
+def test_generate_password_reset_token_round_trips_payload(monkeypatch):
+    module = reload_email_token_utils(monkeypatch)
+
+    token = module.generate_password_reset_token("reader@example.com", "hash")
+
+    assert module.verify_password_reset_token(token) == {
+        "email": "reader@example.com",
+        "password_hash": "hash",
+    }
+
+
+def test_password_reset_token_cannot_be_used_as_email_token(monkeypatch):
+    module = reload_email_token_utils(monkeypatch)
+    token = module.generate_password_reset_token("reader@example.com", "hash")
+
+    with pytest.raises(HTTPException) as exc_info:
+        module.verify_email_token(token)
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "Invalid or expired token"
+
+
+def test_email_token_cannot_be_used_as_password_reset_token(monkeypatch):
+    module = reload_email_token_utils(monkeypatch)
+    token = module.generate_email_token("reader@example.com")
+
+    with pytest.raises(HTTPException) as exc_info:
+        module.verify_password_reset_token(token)
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "Invalid or expired token"

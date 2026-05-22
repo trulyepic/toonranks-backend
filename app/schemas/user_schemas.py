@@ -54,3 +54,13 @@ class ResendVerification(BaseModel):
     captcha_token: Optional[str] = None
 
 
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+    captcha_token: Optional[str] = None
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    password: str
+
+

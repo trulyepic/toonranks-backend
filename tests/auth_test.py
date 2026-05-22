@@ -296,6 +296,148 @@ def test_login_rejects_unverified_user(monkeypatch):
     assert response.json()["detail"] == "Email not verified"
 
 
+def test_forgot_password_sends_reset_email_without_revealing_account(monkeypatch):
+    db_user = SimpleNamespace(
+        email="reader@gmail.com",
+        password="current-hash",
+    )
+    session = FakeAuthSession(execute_result=FakeExecuteResult(one=db_user))
+    cleanup = override_auth_db(session)
+    sent_emails = []
+
+    monkeypatch.setattr(
+        auth,
+        "generate_password_reset_token",
+        lambda email, password_hash: f"reset-token-for-{email}-{password_hash}",
+    )
+    monkeypatch.setattr(
+        auth,
+        "send_password_reset_email",
+        lambda email, token: sent_emails.append((email, token)),
+    )
+
+    try:
+        response = client.post(
+            "/auth/forgot-password",
+            json={"email": "Reader@Gmail.com"},
+        )
+    finally:
+        cleanup()
+
+    assert response.status_code == 200
+    assert response.json() == {"message": auth.FORGOT_PASSWORD_MESSAGE}
+    assert sent_emails == [
+        ("reader@gmail.com", "reset-token-for-reader@gmail.com-current-hash")
+    ]
+    assert session.committed is False
+
+
+def test_forgot_password_returns_generic_message_for_unknown_email(monkeypatch):
+    session = FakeAuthSession(execute_result=FakeExecuteResult(one=None))
+    cleanup = override_auth_db(session)
+
+    monkeypatch.setattr(
+        auth,
+        "send_password_reset_email",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("email sent")),
+    )
+
+    try:
+        response = client.post(
+            "/auth/forgot-password",
+            json={"email": "missing@gmail.com"},
+        )
+    finally:
+        cleanup()
+
+    assert response.status_code == 200
+    assert response.json() == {"message": auth.FORGOT_PASSWORD_MESSAGE}
+    assert session.committed is False
+
+
+def test_reset_password_updates_password_and_invalidates_token(monkeypatch):
+    db_user = SimpleNamespace(
+        email="reader@gmail.com",
+        password=auth.bcrypt.hash("old-password"),
+    )
+    old_hash = db_user.password
+    session = FakeAuthSession(execute_result=FakeExecuteResult(one=db_user))
+    cleanup = override_auth_db(session)
+
+    monkeypatch.setattr(
+        auth,
+        "verify_password_reset_token",
+        lambda token: {"email": "reader@gmail.com", "password_hash": old_hash},
+    )
+
+    try:
+        response = client.post(
+            "/auth/reset-password",
+            json={"token": "reset-token", "password": "new-password"},
+        )
+    finally:
+        cleanup()
+
+    assert response.status_code == 200
+    assert response.json() == {"message": "Password reset successful. You can now log in."}
+    assert session.committed is True
+    assert db_user.password != old_hash
+    assert auth.bcrypt.verify("new-password", db_user.password)
+
+
+def test_reset_password_rejects_reused_token_after_password_changes(monkeypatch):
+    db_user = SimpleNamespace(
+        email="reader@gmail.com",
+        password=auth.bcrypt.hash("new-password"),
+    )
+    session = FakeAuthSession(execute_result=FakeExecuteResult(one=db_user))
+    cleanup = override_auth_db(session)
+
+    monkeypatch.setattr(
+        auth,
+        "verify_password_reset_token",
+        lambda token: {
+            "email": "reader@gmail.com",
+            "password_hash": "old-password-hash",
+        },
+    )
+
+    try:
+        response = client.post(
+            "/auth/reset-password",
+            json={"token": "reset-token", "password": "another-password"},
+        )
+    finally:
+        cleanup()
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Invalid or expired token"
+    assert session.committed is False
+
+
+def test_reset_password_rejects_short_password(monkeypatch):
+    session = FakeAuthSession()
+    cleanup = override_auth_db(session)
+
+    monkeypatch.setattr(
+        auth,
+        "verify_password_reset_token",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("token used")),
+    )
+
+    try:
+        response = client.post(
+            "/auth/reset-password",
+            json={"token": "reset-token", "password": "short"},
+        )
+    finally:
+        cleanup()
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Password must be at least 8 characters"
+    assert session.committed is False
+
+
 def test_create_mobile_auth_code_returns_deep_link_callback():
     current_user = SimpleNamespace(id=7, username="reader", role="GENERAL")
     session = FakeAuthSession()
