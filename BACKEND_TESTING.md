@@ -29,7 +29,7 @@ pytest -m "not integration"
 Run integration tests locally only when you have a disposable test database ready:
 
 ```bash
-set TEST_DATABASE_URL=postgresql+asyncpg://toonranks_test:toonranks_test@localhost:5432/toonranks_test
+set TEST_DATABASE_URL=postgresql+asyncpg://<local-test-user>:<local-test-password>@localhost:5432/toonranks_test
 pytest -m integration
 ```
 
@@ -91,24 +91,28 @@ Feature-specific values may also be needed when those integrations are enabled:
 - `SMTP_PORT`
 - `SMTP_USERNAME`
 - `SMTP_PASSWORD`
-- `FROM_EMAIL`
+- `VERIFICATION_FROM_EMAIL`
+- `PASSWORD_RESET_FROM_EMAIL`
 - `FROM_NAME`
 - `EMAIL_LOGO_URL`
 - `SUPPORT_EMAIL`
+- `BILLING_EMAIL`
+- `ADMIN_ALERT_EMAIL`
 - `OPERATOR_NAME`
 - `GOOGLE_CLIENT_ID`
 - `RECAPTCHA_SECRET_KEY`
 - `RECAPTCHA_SITE_KEY`
 - `RECAPTCHA_PROJECT_ID`
 
-For the Toon Ranks support mailbox on Zoho, configure email sending with these non-secret values:
+For the Toon Ranks support mailbox, keep SMTP credentials in Railway variables/secrets. Configure
+these non-secret alias values:
 
-- `SMTP_HOST=smtp.zoho.com`
-- `SMTP_PORT=587`
-- `SMTP_USERNAME=support@toonranks.com`
-- `FROM_EMAIL=support@toonranks.com`
+- `VERIFICATION_FROM_EMAIL=noreply@toonranks.com`
+- `PASSWORD_RESET_FROM_EMAIL=accounts@toonranks.com`
 - `FROM_NAME=Toon Ranks`
 - `SUPPORT_EMAIL=support@toonranks.com`
+- `BILLING_EMAIL=billing@toonranks.com`
+- `ADMIN_ALERT_EMAIL=admin@toonranks.com`
 - `OPERATOR_NAME=Nofara LLC`
 
-Set `SMTP_PASSWORD` to the Zoho application-specific password for the support mailbox.
+Never commit concrete SMTP passwords or app passwords.

@@ -1,13 +1,14 @@
 import importlib
 
-import pytest
-
 import app.email_service as email_service
 
 
 def reload_email_service(monkeypatch):
     monkeypatch.setenv("PUBLIC_ORIGIN", "https://www.toonranks.com")
-    monkeypatch.setenv("FROM_EMAIL", "support@toonranks.com")
+    monkeypatch.delenv("FROM_EMAIL", raising=False)
+    monkeypatch.setenv("VERIFICATION_FROM_EMAIL", "noreply@toonranks.com")
+    monkeypatch.setenv("PASSWORD_RESET_FROM_EMAIL", "accounts@toonranks.com")
+    monkeypatch.setenv("SUPPORT_EMAIL", "support@toonranks.com")
     monkeypatch.delenv("FROM_NAME", raising=False)
     return importlib.reload(email_service)
 
@@ -17,7 +18,7 @@ def test_build_verification_email_uses_branded_sender_and_subject(monkeypatch):
 
     message = module._build_verification_email("reader@example.com", "test-token")
 
-    assert message["From"] == "Toon Ranks <support@toonranks.com>"
+    assert message["From"] == "Toon Ranks <noreply@toonranks.com>"
     assert message["Reply-To"] == "support@toonranks.com"
     assert message["To"] == "reader@example.com"
     assert message["Subject"] == "Verify your Toon Ranks email address"
@@ -47,14 +48,16 @@ def test_build_verification_email_includes_plain_text_and_html_parts(monkeypatch
     assert "https://www.toonranks.com/verify-email?token=test-token" in html
 
 
-def test_build_verification_email_requires_from_email(monkeypatch):
+def test_build_verification_email_defaults_to_noreply_alias(monkeypatch):
     module = reload_email_service(monkeypatch)
-    monkeypatch.delenv("FROM_EMAIL")
+    monkeypatch.delenv("FROM_EMAIL", raising=False)
+    monkeypatch.delenv("VERIFICATION_FROM_EMAIL", raising=False)
+    module = importlib.reload(module)
 
-    with pytest.raises(RuntimeError) as exc_info:
-        module._build_verification_email("reader@example.com", "test-token")
+    message = module._build_verification_email("reader@example.com", "test-token")
 
-    assert str(exc_info.value) == "FROM_EMAIL is required to send verification email"
+    assert message["From"] == "Toon Ranks <noreply@toonranks.com>"
+    assert message["Reply-To"] == "support@toonranks.com"
 
 
 def test_build_password_reset_email_includes_plain_text_and_html_parts(monkeypatch):
@@ -64,7 +67,7 @@ def test_build_password_reset_email_includes_plain_text_and_html_parts(monkeypat
     body = message.get_body(preferencelist=("plain",)).get_content()
     html = message.get_body(preferencelist=("html",)).get_content()
 
-    assert message["From"] == "Toon Ranks <support@toonranks.com>"
+    assert message["From"] == "Toon Ranks <accounts@toonranks.com>"
     assert message["Reply-To"] == "support@toonranks.com"
     assert message["To"] == "reader@example.com"
     assert message["Subject"] == "Reset your Toon Ranks password"

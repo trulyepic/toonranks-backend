@@ -14,6 +14,12 @@ LOGO_URL = os.getenv(
     f"{SITE_ORIGIN}/android-chrome-192x192.png",
 )
 SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", "support@toonranks.com")
+VERIFICATION_FROM_EMAIL = os.getenv("VERIFICATION_FROM_EMAIL")
+VERIFICATION_FROM_EMAIL = VERIFICATION_FROM_EMAIL or "noreply@toonranks.com"
+PASSWORD_RESET_FROM_EMAIL = os.getenv("PASSWORD_RESET_FROM_EMAIL")
+PASSWORD_RESET_FROM_EMAIL = PASSWORD_RESET_FROM_EMAIL or "accounts@toonranks.com"
+BILLING_EMAIL = os.getenv("BILLING_EMAIL", "billing@toonranks.com")
+ADMIN_ALERT_EMAIL = os.getenv("ADMIN_ALERT_EMAIL", "admin@toonranks.com")
 OPERATOR_NAME = os.getenv("OPERATOR_NAME", "Nofara LLC")
 
 
@@ -35,7 +41,7 @@ def _message_id_domain(from_email: str) -> str:
 
 
 def _build_verification_email(to_email: str, token: str) -> EmailMessage:
-    from_email = _required_env("FROM_EMAIL")
+    from_email = VERIFICATION_FROM_EMAIL
 
     verify_url = f"{SITE_ORIGIN}/verify-email?token={token}"
     subject = "Verify your Toon Ranks email address"
@@ -168,7 +174,7 @@ The Toon Ranks team
     msg["From"] = formataddr((FROM_NAME, from_email))
     msg["To"] = to_email
     msg["Subject"] = subject
-    msg["Reply-To"] = from_email
+    msg["Reply-To"] = SUPPORT_EMAIL
     msg["Message-ID"] = make_msgid(domain=_message_id_domain(from_email))
     msg["X-Auto-Response-Suppress"] = "All"
     msg.set_content(text)
@@ -177,7 +183,7 @@ The Toon Ranks team
 
 
 def _build_password_reset_email(to_email: str, token: str) -> EmailMessage:
-    from_email = _required_env("FROM_EMAIL")
+    from_email = PASSWORD_RESET_FROM_EMAIL
 
     reset_url = f"{SITE_ORIGIN}/reset-password?token={token}"
     subject = "Reset your Toon Ranks password"
@@ -300,7 +306,7 @@ The Toon Ranks team
     msg["From"] = formataddr((FROM_NAME, from_email))
     msg["To"] = to_email
     msg["Subject"] = subject
-    msg["Reply-To"] = from_email
+    msg["Reply-To"] = SUPPORT_EMAIL
     msg["Message-ID"] = make_msgid(domain=_message_id_domain(from_email))
     msg["X-Auto-Response-Suppress"] = "All"
     msg.set_content(text)
@@ -308,11 +314,10 @@ The Toon Ranks team
     return msg
 
 
-def _send_email(to_email: str, msg: EmailMessage):
+def _send_email(to_email: str, msg: EmailMessage, from_email: str):
     smtp_host = _required_env("SMTP_HOST")
     smtp_username = _required_env("SMTP_USERNAME")
     smtp_password = _required_env("SMTP_PASSWORD")
-    from_email = _required_env("FROM_EMAIL")
 
     with smtplib.SMTP(smtp_host, _smtp_port()) as server:
         server.starttls()
@@ -324,7 +329,7 @@ def send_verification_email(to_email: str, token: str):
     msg = _build_verification_email(to_email, token)
 
     try:
-        _send_email(to_email, msg)
+        _send_email(to_email, msg, VERIFICATION_FROM_EMAIL)
     except Exception as e:
         print("SMTP send failed:", e)
         raise
@@ -334,7 +339,7 @@ def send_password_reset_email(to_email: str, token: str):
     msg = _build_password_reset_email(to_email, token)
 
     try:
-        _send_email(to_email, msg)
+        _send_email(to_email, msg, PASSWORD_RESET_FROM_EMAIL)
     except Exception as e:
         print("SMTP send failed:", e)
         raise
