@@ -36,6 +36,9 @@ def test_build_verification_email_includes_plain_text_and_html_parts(monkeypatch
     assert "The Toon Ranks team" in body
     assert "This link expires in 1 hour." in body
     assert "mark them as Not Spam" in body
+    assert "If you have questions, contact support@toonranks.com." in body
+    assert "reply to this email" not in body.lower()
+    assert "reply here" not in html.lower()
     assert "TOON RANKS" in html
     assert "Confirm your Toon Ranks email" in html
     assert "Confirm email" in html
@@ -76,4 +79,6 @@ def test_build_password_reset_email_includes_plain_text_and_html_parts(monkeypat
     assert "Reset your password" in html
     assert "Reset password" in html
     assert "This reset link expires in 30 minutes." in html
+    assert "reply here" not in html.lower()
+    assert "reply to this email" not in html.lower()
     assert "https://www.toonranks.com/reset-password?token=reset-token" in html

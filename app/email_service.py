@@ -57,7 +57,7 @@ Welcome to Toon Ranks. Verify your email address to finish setting up your reade
 This link expires in 1 hour. If future Toon Ranks emails land in your Spam folder,
 mark them as Not Spam so verification and support messages arrive normally.
 
-If you have questions, reply to this email or contact {SUPPORT_EMAIL}.
+If you have questions, contact {SUPPORT_EMAIL}.
 
 If you did not create a Toon Ranks account, you can safely ignore this email.
 
@@ -118,7 +118,7 @@ The Toon Ranks team
                   </tr>
                 </table>
                 <p style="margin:22px 0 0;color:#556074;font-size:14px;line-height:22px;">
-                  Questions or trouble signing in? Reply here and we will help.
+                  Questions or trouble signing in? Contact support and we will help.
                 </p>
                 <p style="margin:24px 0 0;color:#556074;font-size:14px;line-height:22px;">
                   Thanks,<br>
@@ -143,7 +143,7 @@ The Toon Ranks team
                   <a href="{escape(SITE_ORIGIN, quote=True)}" style="color:#68778a;text-decoration:none;">toonranks.com</a>
                 </p>
                 <p style="margin:16px 0 0;">
-                  Need help? Reply to this email or contact
+                  Need help? Contact
                   <a href="mailto:{escape(SUPPORT_EMAIL, quote=True)}" style="color:#68778a;text-decoration:underline;">{escape(SUPPORT_EMAIL)}</a>.
                 </p>
                 <p style="margin:16px 0 0;">
@@ -256,7 +256,7 @@ The Toon Ranks team
                   </tr>
                 </table>
                 <p style="margin:22px 0 0;color:#556074;font-size:14px;line-height:22px;">
-                  Questions or trouble signing in? Reply here and we will help.
+                  Questions or trouble signing in? Contact support and we will help.
                 </p>
                 <p style="margin:24px 0 0;color:#556074;font-size:14px;line-height:22px;">
                   Thanks,<br>
@@ -281,7 +281,7 @@ The Toon Ranks team
                   <a href="{escape(SITE_ORIGIN, quote=True)}" style="color:#68778a;text-decoration:none;">toonranks.com</a>
                 </p>
                 <p style="margin:16px 0 0;">
-                  Need help? Reply to this email or contact
+                  Need help? Contact
                   <a href="mailto:{escape(SUPPORT_EMAIL, quote=True)}" style="color:#68778a;text-decoration:underline;">{escape(SUPPORT_EMAIL)}</a>.
                 </p>
               </td>
