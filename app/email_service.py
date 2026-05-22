@@ -8,11 +8,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 SITE_ORIGIN = os.getenv("PUBLIC_ORIGIN", "https://www.toonranks.com").rstrip("/")
-FROM_NAME = os.getenv("FROM_NAME", "Toon Ranks Support")
+FROM_NAME = os.getenv("FROM_NAME", "Toon Ranks")
 LOGO_URL = os.getenv(
     "EMAIL_LOGO_URL",
     f"{SITE_ORIGIN}/android-chrome-192x192.png",
 )
+SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", "support@toonranks.com")
+OPERATOR_NAME = os.getenv("OPERATOR_NAME", "Nofara LLC")
 
 
 def _smtp_port() -> int:
@@ -42,45 +44,103 @@ def _build_verification_email(to_email: str, token: str) -> EmailMessage:
 
     text = f"""Hi there,
 
-Welcome to Toon Ranks. Verify your email address to finish creating your account:
+Welcome to Toon Ranks. Verify your email address to finish creating your account.
 
 {verify_url}
 
-This verification link expires in 1 hour. If you did not create a Toon Ranks account,
-you can safely ignore this email.
+This verification link expires in 1 hour. If you have questions, reply to this email
+or contact {SUPPORT_EMAIL}.
+
+If you did not create a Toon Ranks account, you can safely ignore this email.
 
 Thanks,
-Toon Ranks Support
+The Toon Ranks team
 """
 
     html = f"""\
 <!doctype html>
 <html>
-  <body style="margin:0;background:#f6f8fb;font-family:Arial,Helvetica,sans-serif;color:#111827;">
-    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f6f8fb;padding:32px 16px;">
+  <body style="margin:0;background:#ffffff;font-family:Arial,Helvetica,sans-serif;color:#34364a;">
+    <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">
+      Finish creating your Toon Ranks account by verifying your email address.
+    </div>
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#ffffff;">
       <tr>
-        <td align="center">
-          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">
+        <td align="center" style="padding:72px 20px 40px;">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:420px;">
             <tr>
-              <td style="padding:28px 32px 16px;text-align:center;">
-                <img src="{escaped_logo_url}" width="72" height="72" alt="Toon Ranks" style="display:inline-block;border-radius:16px;">
-                <h1 style="margin:18px 0 8px;font-size:24px;line-height:32px;color:#111827;">Verify your email address</h1>
-                <p style="margin:0;color:#4b5563;font-size:15px;line-height:24px;">Welcome to Toon Ranks. Confirm this email to finish creating your account.</p>
+              <td align="left" style="padding:0 0 26px;">
+                <table role="presentation" cellspacing="0" cellpadding="0" style="border:1px solid #e8eaf2;border-radius:999px;background:#ffffff;">
+                  <tr>
+                    <td style="padding:8px 14px 8px 10px;">
+                      <table role="presentation" cellspacing="0" cellpadding="0">
+                        <tr>
+                          <td style="vertical-align:middle;">
+                            <img src="{escaped_logo_url}" width="34" height="34" alt="" style="display:block;border-radius:10px;border:0;">
+                          </td>
+                          <td style="vertical-align:middle;padding-left:10px;font-size:14px;line-height:18px;font-weight:800;letter-spacing:3px;color:#26283a;">
+                            TOON RANKS
+                          </td>
+                        </tr>
+                      </table>
+                    </td>
+                  </tr>
+                </table>
               </td>
             </tr>
             <tr>
-              <td style="padding:12px 32px 28px;text-align:center;">
-                <a href="{escaped_verify_url}" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;font-weight:700;font-size:16px;line-height:20px;padding:14px 22px;border-radius:8px;">Verify email</a>
-                <p style="margin:22px 0 0;color:#6b7280;font-size:13px;line-height:20px;">This verification link expires in 1 hour.</p>
-                <p style="margin:14px 0 0;color:#6b7280;font-size:13px;line-height:20px;">If the button does not work, copy and paste this URL into your browser:</p>
-                <p style="margin:8px 0 0;word-break:break-all;font-size:13px;line-height:20px;">
-                  <a href="{escaped_verify_url}" style="color:#2563eb;">{escaped_verify_url}</a>
+              <td align="left">
+                <h1 style="margin:0;color:#3b3d55;font-size:28px;line-height:36px;font-weight:500;letter-spacing:0;">
+                  Verify your email address
+                </h1>
+                <p style="margin:18px 0 0;color:#555971;font-size:15px;line-height:24px;">
+                  Welcome to Toon Ranks. Confirm this email to finish creating your account and start saving, rating, and discussing series with your profile.
+                </p>
+                <p style="margin:20px 0 0;">
+                  <a href="{escaped_verify_url}" style="display:inline-block;background:#4f6df5;color:#ffffff;text-decoration:none;font-size:14px;line-height:20px;font-weight:700;padding:12px 26px;border-radius:999px;">
+                    Verify your email
+                  </a>
+                </p>
+                <p style="margin:22px 0 0;color:#555971;font-size:14px;line-height:22px;">
+                  If you have any questions, just reply to this email.
+                </p>
+                <p style="margin:24px 0 0;color:#555971;font-size:14px;line-height:22px;">
+                  Thanks,<br>
+                  <em>The Toon Ranks team</em>
                 </p>
               </td>
             </tr>
             <tr>
-              <td style="padding:18px 32px;background:#f9fafb;color:#6b7280;font-size:12px;line-height:18px;text-align:center;">
-                You received this email because someone created a Toon Ranks account with this address. If that was not you, no action is needed.
+              <td style="padding:26px 0 0;">
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+                  <tr>
+                    <td style="border-top:1px solid #eef0f6;font-size:1px;line-height:1px;">&nbsp;</td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            <tr>
+              <td align="left" style="padding:18px 0 0;color:#8a8da1;font-size:12px;line-height:20px;">
+                <p style="margin:0;">
+                  Sent with care from<br>
+                  Toon Ranks by {escape(OPERATOR_NAME)}<br>
+                  <a href="{escape(SITE_ORIGIN, quote=True)}" style="color:#6f748a;text-decoration:none;">toonranks.com</a>
+                </p>
+                <p style="margin:16px 0 0;">
+                  Need help? Reply to this email or contact
+                  <a href="mailto:{escape(SUPPORT_EMAIL, quote=True)}" style="color:#6f748a;text-decoration:underline;">{escape(SUPPORT_EMAIL)}</a>.
+                </p>
+                <p style="margin:16px 0 0;">
+                  This verification link expires in 1 hour. If you did not create a Toon Ranks account, no action is needed.
+                </p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:18px 0 0;">
+                <p style="margin:0;word-break:break-all;color:#9ca0b3;font-size:11px;line-height:18px;">
+                  Button not working? Paste this link into your browser:<br>
+                  <a href="{escaped_verify_url}" style="color:#6f748a;">{escaped_verify_url}</a>
+                </p>
               </td>
             </tr>
           </table>
