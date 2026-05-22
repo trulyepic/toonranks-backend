@@ -34,10 +34,12 @@ def test_build_verification_email_includes_plain_text_and_html_parts(monkeypatch
     assert "https://www.toonranks.com/verify-email?token=test-token" in body
     assert "The Toon Ranks team" in body
     assert "This link expires in 1 hour." in body
+    assert "mark them as Not Spam" in body
     assert "TOON RANKS" in html
     assert "Confirm your Toon Ranks email" in html
     assert "Confirm email" in html
     assert "saved series, category ratings, and forum discussions" in html
+    assert "mark it as Not Spam" in html
     assert "The Toon Ranks team" in html
     assert "Nofara LLC" in html
     assert "support@toonranks.com" in html

@@ -48,8 +48,10 @@ Welcome to Toon Ranks. Verify your email address to finish setting up your reade
 
 {verify_url}
 
-This link expires in 1 hour. If you have questions, reply to this email
-or contact {SUPPORT_EMAIL}.
+This link expires in 1 hour. If future Toon Ranks emails land in your Spam folder,
+mark them as Not Spam so verification and support messages arrive normally.
+
+If you have questions, reply to this email or contact {SUPPORT_EMAIL}.
 
 If you did not create a Toon Ranks account, you can safely ignore this email.
 
@@ -105,7 +107,7 @@ The Toon Ranks team
                 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:26px 0 0;border:1px solid #e7edf5;border-radius:16px;background:#f8fbff;">
                   <tr>
                     <td style="padding:16px 18px;color:#5d6878;font-size:13px;line-height:21px;">
-                      This verification link expires in 1 hour. If the request was not yours, you can ignore this message and the account will remain unverified.
+                      This verification link expires in 1 hour. If this email landed in Spam, mark it as Not Spam before using the link so future Toon Ranks messages arrive normally.
                     </td>
                   </tr>
                 </table>
@@ -140,6 +142,9 @@ The Toon Ranks team
                 </p>
                 <p style="margin:16px 0 0;">
                   This verification link expires in 1 hour. If you did not create a Toon Ranks account, no action is needed.
+                </p>
+                <p style="margin:16px 0 0;">
+                  If this message was filtered to Spam, mark it as Not Spam to help your inbox recognize Toon Ranks.
                 </p>
               </td>
             </tr>
