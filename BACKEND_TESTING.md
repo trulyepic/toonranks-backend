@@ -94,6 +94,8 @@ Feature-specific values may also be needed when those integrations are enabled:
 - `FROM_EMAIL`
 - `FROM_NAME`
 - `EMAIL_LOGO_URL`
+- `SUPPORT_EMAIL`
+- `OPERATOR_NAME`
 - `GOOGLE_CLIENT_ID`
 - `RECAPTCHA_SECRET_KEY`
 - `RECAPTCHA_SITE_KEY`
@@ -105,5 +107,8 @@ For the Toon Ranks support mailbox on Zoho, configure email sending with these n
 - `SMTP_PORT=587`
 - `SMTP_USERNAME=support@toonranks.com`
 - `FROM_EMAIL=support@toonranks.com`
+- `FROM_NAME=Toon Ranks`
+- `SUPPORT_EMAIL=support@toonranks.com`
+- `OPERATOR_NAME=Nofara LLC`
 
 Set `SMTP_PASSWORD` to the Zoho application-specific password for the support mailbox.
