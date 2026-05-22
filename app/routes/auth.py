@@ -229,7 +229,10 @@ async def signup(request: Request, user: UserCreate, db: AsyncSession = Depends(
         raise HTTPException(status_code=500, detail="Signup failed during email sending")
 
     return SignupResponse(
-        message="User created successfully. Please verify your email.",
+        message=(
+            "User created successfully. Please check your inbox and Spam folder "
+            "for the verification email."
+        ),
         token=token,
     )
 
@@ -452,7 +455,12 @@ async def resend_verification(
         # Don’t leak details; stay generic
         return {"message": "If an account exists, a new verification link has been sent."}
 
-    return {"message": "Verification email sent. Please check your inbox."}
+    return {
+        "message": (
+            "Verification email sent. Please check your inbox and Spam folder. "
+            "If it lands in Spam, mark it as Not Spam."
+        )
+    }
 
 
 @router.get("/users", response_model=list[UserAdminOut])

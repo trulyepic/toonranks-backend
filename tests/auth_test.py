@@ -126,7 +126,10 @@ def test_signup_creates_unverified_user_with_normalized_email(monkeypatch):
 
     assert response.status_code == 200
     assert response.json() == {
-        "message": "User created successfully. Please verify your email.",
+        "message": (
+            "User created successfully. Please check your inbox and Spam folder "
+            "for the verification email."
+        ),
         "token": "token-for-reader@gmail.com",
     }
     assert session.flushed is True
