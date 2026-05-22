@@ -92,6 +92,8 @@ Feature-specific values may also be needed when those integrations are enabled:
 - `SMTP_USERNAME`
 - `SMTP_PASSWORD`
 - `FROM_EMAIL`
+- `FROM_NAME`
+- `EMAIL_LOGO_URL`
 - `GOOGLE_CLIENT_ID`
 - `RECAPTCHA_SECRET_KEY`
 - `RECAPTCHA_SITE_KEY`
