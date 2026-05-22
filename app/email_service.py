@@ -9,6 +9,12 @@ load_dotenv()
 
 SITE_ORIGIN = os.getenv("PUBLIC_ORIGIN", "https://www.toonranks.com").rstrip("/")
 FROM_NAME = os.getenv("FROM_NAME", "Toon Ranks")
+VERIFICATION_FROM_NAME = os.getenv(
+    "VERIFICATION_FROM_NAME", "Toon Ranks Verification"
+)
+PASSWORD_RESET_FROM_NAME = os.getenv(
+    "PASSWORD_RESET_FROM_NAME", "Toon Ranks Accounts"
+)
 LOGO_URL = os.getenv(
     "EMAIL_LOGO_URL",
     f"{SITE_ORIGIN}/android-chrome-192x192.png",
@@ -171,7 +177,7 @@ The Toon Ranks team
 """
 
     msg = EmailMessage()
-    msg["From"] = formataddr((FROM_NAME, from_email))
+    msg["From"] = formataddr((VERIFICATION_FROM_NAME or FROM_NAME, from_email))
     msg["To"] = to_email
     msg["Subject"] = subject
     msg["Reply-To"] = SUPPORT_EMAIL
@@ -303,7 +309,7 @@ The Toon Ranks team
 """
 
     msg = EmailMessage()
-    msg["From"] = formataddr((FROM_NAME, from_email))
+    msg["From"] = formataddr((PASSWORD_RESET_FROM_NAME or FROM_NAME, from_email))
     msg["To"] = to_email
     msg["Subject"] = subject
     msg["Reply-To"] = SUPPORT_EMAIL
