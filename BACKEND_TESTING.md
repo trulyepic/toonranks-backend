@@ -96,3 +96,12 @@ Feature-specific values may also be needed when those integrations are enabled:
 - `RECAPTCHA_SECRET_KEY`
 - `RECAPTCHA_SITE_KEY`
 - `RECAPTCHA_PROJECT_ID`
+
+For the Toon Ranks support mailbox on Zoho, configure email sending with these non-secret values:
+
+- `SMTP_HOST=smtp.zoho.com`
+- `SMTP_PORT=587`
+- `SMTP_USERNAME=support@toonranks.com`
+- `FROM_EMAIL=support@toonranks.com`
+
+Set `SMTP_PASSWORD` to the Zoho application-specific password for the support mailbox.
