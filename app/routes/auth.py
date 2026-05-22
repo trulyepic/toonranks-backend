@@ -3,12 +3,14 @@ from fastapi import (APIRouter, Depends, HTTPException,
 from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import AsyncSessionLocal
-from app.email_service import send_verification_email
+from app.email_service import send_password_reset_email, send_verification_email
 from app.limiter import limiter
 from app.models.user_model import User
 from app.schemas.user_schemas import (
     AvatarPresetUpdate,
+    ForgotPasswordRequest,
     ResendVerification,
+    ResetPasswordRequest,
     SignupResponse,
     UserAdminOut,
     UserAvatarOut,
@@ -27,7 +29,12 @@ from pydantic import BaseModel
 from app.models.mobile_auth_code import MobileAuthCode
 from app.utils.captcha import verify_captcha
 from app.utils.token_utils import create_access_token, get_current_user
-from app.utils.email_token_utils import verify_email_token, generate_email_token
+from app.utils.email_token_utils import (
+    generate_email_token,
+    generate_password_reset_token,
+    verify_email_token,
+    verify_password_reset_token,
+)
 from google.oauth2 import id_token
 from google.auth.transport import requests
 from datetime import datetime, timedelta, timezone
@@ -52,6 +59,9 @@ MAX_AVATAR_BYTES = 5 * 1024 * 1024
 AVATAR_SIZE = 256
 MOBILE_AUTH_CODE_EXPIRE_SECONDS = 5 * 60
 ALLOWED_MOBILE_AUTH_REDIRECT_URIS = {"toonranks://auth/callback"}
+FORGOT_PASSWORD_MESSAGE = (
+    "If an account exists for that email, a password reset link has been sent."
+)
 
 
 class MobileAuthCodeCreate(BaseModel):
@@ -366,6 +376,63 @@ async def login(request: Request, user: UserLogin, db: AsyncSession = Depends(ge
         "access_token": access_token,
         "user": user_to_dict(db_user)
     })
+
+
+@router.post("/forgot-password")
+@limiter.limit("3/minute")
+async def forgot_password(
+    request: Request,
+    payload: ForgotPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    if payload.captcha_token:
+        try:
+            await verify_captcha(payload.captcha_token, request=request)
+        except Exception:
+            return {"message": FORGOT_PASSWORD_MESSAGE}
+
+    email = str(payload.email).strip().lower()
+    result = await db.execute(select(User).where(func.lower(User.email) == email))
+    user = result.scalar_one_or_none()
+
+    if not user:
+        return {"message": FORGOT_PASSWORD_MESSAGE}
+
+    try:
+        token = generate_password_reset_token(str(user.email), str(user.password))
+        send_password_reset_email(str(user.email), token)
+    except Exception:
+        return {"message": FORGOT_PASSWORD_MESSAGE}
+
+    return {"message": FORGOT_PASSWORD_MESSAGE}
+
+
+@router.post("/reset-password")
+@limiter.limit("5/minute")
+async def reset_password(
+    request: Request,
+    payload: ResetPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    new_password = payload.password.strip()
+    if len(new_password) < 8:
+        raise HTTPException(
+            status_code=400,
+            detail="Password must be at least 8 characters",
+        )
+
+    reset_payload = verify_password_reset_token(payload.token)
+    email = str(reset_payload["email"]).strip().lower()
+    result = await db.execute(select(User).where(func.lower(User.email) == email))
+    user = result.scalar_one_or_none()
+
+    if not user or str(user.password) != str(reset_payload["password_hash"]):
+        raise HTTPException(status_code=400, detail="Invalid or expired token")
+
+    user.password = bcrypt.hash(new_password)
+    await db.commit()
+
+    return {"message": "Password reset successful. You can now log in."}
 
 
 
