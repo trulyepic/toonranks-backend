@@ -27,6 +27,7 @@ from PIL import Image, ImageOps
 from pydantic import BaseModel
 
 from app.models.mobile_auth_code import MobileAuthCode
+from app.models.mobile_refresh_token import MobileRefreshToken
 from app.utils.captcha import verify_captcha
 from app.utils.token_utils import create_access_token, get_current_user
 from app.utils.email_token_utils import (
@@ -58,6 +59,7 @@ ALLOWED_AVATAR_MIMES = {"image/png", "image/jpeg", "image/webp"}
 MAX_AVATAR_BYTES = 5 * 1024 * 1024
 AVATAR_SIZE = 256
 MOBILE_AUTH_CODE_EXPIRE_SECONDS = 5 * 60
+MOBILE_REFRESH_TOKEN_EXPIRE_DAYS = 30
 ALLOWED_MOBILE_AUTH_REDIRECT_URIS = {"toonranks://auth/callback"}
 FORGOT_PASSWORD_MESSAGE = (
     "If an account exists for that email, a password reset link has been sent."
@@ -71,6 +73,15 @@ class MobileAuthCodeCreate(BaseModel):
 
 class MobileAuthTokenExchange(BaseModel):
     code: str
+
+
+class MobileRefreshTokenExchange(BaseModel):
+    refresh_token: str
+
+
+class MobileLogoutRequest(BaseModel):
+    refresh_token: Optional[str] = None
+
 
 async def get_db():
     async with AsyncSessionLocal() as session:
@@ -104,14 +115,41 @@ def hash_mobile_auth_code(code: str) -> str:
     return hashlib.sha256(code.encode("utf-8")).hexdigest()
 
 
+def hash_mobile_refresh_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
 def is_allowed_mobile_redirect_uri(redirect_uri: str) -> bool:
     return redirect_uri in ALLOWED_MOBILE_AUTH_REDIRECT_URIS
 
 
-def mobile_auth_code_expired(expires_at: datetime) -> bool:
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def timestamp_expired(expires_at: datetime) -> bool:
     if expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=timezone.utc)
-    return expires_at <= datetime.now(timezone.utc)
+    return expires_at <= utc_now()
+
+
+def mobile_auth_code_expired(expires_at: datetime) -> bool:
+    return timestamp_expired(expires_at)
+
+
+def mobile_refresh_token_expired(expires_at: datetime) -> bool:
+    return timestamp_expired(expires_at)
+
+
+def create_mobile_refresh_token_record(user_id: int) -> tuple[str, MobileRefreshToken]:
+    token = secrets.token_urlsafe(48)
+    now = utc_now()
+    return token, MobileRefreshToken(
+        user_id=user_id,
+        token_hash=hash_mobile_refresh_token(token),
+        created_at=now,
+        expires_at=now + timedelta(days=MOBILE_REFRESH_TOKEN_EXPIRE_DAYS),
+    )
 
 
 async def get_user_for_update(current_user: User, db: AsyncSession) -> User:
@@ -132,7 +170,7 @@ async def create_mobile_auth_code(
         raise HTTPException(status_code=400, detail="Invalid mobile redirect URI")
 
     code = secrets.token_urlsafe(32)
-    expires_at = datetime.now(timezone.utc) + timedelta(
+    expires_at = utc_now() + timedelta(
         seconds=MOBILE_AUTH_CODE_EXPIRE_SECONDS
     )
     db.add(
@@ -185,13 +223,77 @@ async def exchange_mobile_auth_code(
         raise HTTPException(status_code=400, detail="Invalid or expired mobile auth code")
 
     access_token = create_access_token(user)
-    auth_code.used_at = datetime.now(timezone.utc)
+    refresh_token, refresh_token_record = create_mobile_refresh_token_record(user.id)
+    db.add(refresh_token_record)
+    auth_code.used_at = utc_now()
+    await db.commit()
+
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "user": user_to_dict(user),
+    }
+
+
+@router.post("/mobile-refresh")
+async def refresh_mobile_access_token(
+    payload: MobileRefreshTokenExchange,
+    db: AsyncSession = Depends(get_db),
+):
+    refresh_token = payload.refresh_token.strip()
+    if not refresh_token:
+        raise HTTPException(status_code=400, detail="Invalid mobile refresh token")
+
+    result = await db.execute(
+        select(MobileRefreshToken).where(
+            MobileRefreshToken.token_hash == hash_mobile_refresh_token(refresh_token)
+        )
+    )
+    token_record = result.scalars().first()
+
+    if (
+        not token_record
+        or token_record.revoked_at is not None
+        or mobile_refresh_token_expired(token_record.expires_at)
+    ):
+        raise HTTPException(status_code=401, detail="Invalid or expired mobile refresh token")
+
+    user = await db.get(User, token_record.user_id)
+    if not user:
+        token_record.revoked_at = utc_now()
+        await db.commit()
+        raise HTTPException(status_code=401, detail="Invalid or expired mobile refresh token")
+
+    token_record.last_used_at = utc_now()
+    access_token = create_access_token(user)
     await db.commit()
 
     return {
         "access_token": access_token,
         "user": user_to_dict(user),
     }
+
+
+@router.post("/mobile-logout")
+async def revoke_mobile_refresh_token(
+    payload: MobileLogoutRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    refresh_token = (payload.refresh_token or "").strip()
+    if not refresh_token:
+        return {"message": "Logged out"}
+
+    result = await db.execute(
+        select(MobileRefreshToken).where(
+            MobileRefreshToken.token_hash == hash_mobile_refresh_token(refresh_token)
+        )
+    )
+    token_record = result.scalars().first()
+    if token_record and token_record.revoked_at is None:
+        token_record.revoked_at = utc_now()
+        await db.commit()
+
+    return {"message": "Logged out"}
 
 
 
