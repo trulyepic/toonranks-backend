@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from app.models.mobile_auth_code import MobileAuthCode
+from app.models.mobile_refresh_token import MobileRefreshToken
 from app.main import app
 from app.routes import auth
 
@@ -503,7 +504,7 @@ def test_create_mobile_auth_code_rejects_unknown_redirect_uri():
     assert session.committed is False
 
 
-def test_exchange_mobile_auth_code_returns_token_and_marks_code_used(monkeypatch):
+def test_exchange_mobile_auth_code_returns_tokens_and_marks_code_used(monkeypatch):
     auth_code = SimpleNamespace(
         user_id=7,
         code_hash=auth.hash_mobile_auth_code("mobile-code"),
@@ -530,8 +531,10 @@ def test_exchange_mobile_auth_code_returns_token_and_marks_code_used(monkeypatch
         cleanup()
 
     assert response.status_code == 200
-    assert response.json() == {
+    body = response.json()
+    assert body == {
         "access_token": "token-for-reader",
+        "refresh_token": body["refresh_token"],
         "user": {
             "id": 7,
             "username": "reader",
@@ -540,8 +543,214 @@ def test_exchange_mobile_auth_code_returns_token_and_marks_code_used(monkeypatch
             "avatar_preset": "emerald",
         },
     }
+    assert body["refresh_token"]
     assert auth_code.used_at is not None
     assert session.committed is True
+    refresh_records = [
+        item for item in session.added if isinstance(item, MobileRefreshToken)
+    ]
+    assert len(refresh_records) == 1
+    assert refresh_records[0].user_id == 7
+    assert refresh_records[0].token_hash == auth.hash_mobile_refresh_token(
+        body["refresh_token"]
+    )
+    assert refresh_records[0].token_hash != body["refresh_token"]
+
+
+def test_refresh_mobile_access_token_returns_new_access_token(monkeypatch):
+    refresh_record = SimpleNamespace(
+        user_id=7,
+        token_hash=auth.hash_mobile_refresh_token("refresh-token"),
+        expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+        revoked_at=None,
+        last_used_at=None,
+    )
+    db_user = SimpleNamespace(
+        id=7,
+        username="reader",
+        role="GENERAL",
+        avatar_url=None,
+        avatar_preset="blue",
+    )
+    session = FakeAuthSession(
+        execute_result=FakeExecuteResult(one=refresh_record),
+        get_result=db_user,
+    )
+    cleanup = override_auth_db(session)
+    monkeypatch.setattr(auth, "create_access_token", lambda user: f"token-for-{user.username}")
+
+    try:
+        response = client.post(
+            "/auth/mobile-refresh",
+            json={"refresh_token": "refresh-token"},
+        )
+    finally:
+        cleanup()
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "access_token": "token-for-reader",
+        "user": {
+            "id": 7,
+            "username": "reader",
+            "role": "GENERAL",
+            "avatar_url": None,
+            "avatar_preset": "blue",
+        },
+    }
+    assert refresh_record.last_used_at is not None
+    assert session.committed is True
+
+
+def test_refresh_mobile_access_token_rejects_unknown_token(monkeypatch):
+    session = FakeAuthSession(execute_result=FakeExecuteResult(one=None))
+    cleanup = override_auth_db(session)
+    monkeypatch.setattr(
+        auth,
+        "create_access_token",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("token created")),
+    )
+
+    try:
+        response = client.post(
+            "/auth/mobile-refresh",
+            json={"refresh_token": "missing-token"},
+        )
+    finally:
+        cleanup()
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid or expired mobile refresh token"
+    assert session.committed is False
+
+
+def test_refresh_mobile_access_token_rejects_revoked_token(monkeypatch):
+    refresh_record = SimpleNamespace(
+        user_id=7,
+        token_hash=auth.hash_mobile_refresh_token("refresh-token"),
+        expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+        revoked_at=datetime.now(timezone.utc),
+        last_used_at=None,
+    )
+    session = FakeAuthSession(execute_result=FakeExecuteResult(one=refresh_record))
+    cleanup = override_auth_db(session)
+    monkeypatch.setattr(
+        auth,
+        "create_access_token",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("token created")),
+    )
+
+    try:
+        response = client.post(
+            "/auth/mobile-refresh",
+            json={"refresh_token": "refresh-token"},
+        )
+    finally:
+        cleanup()
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid or expired mobile refresh token"
+    assert refresh_record.last_used_at is None
+    assert session.committed is False
+
+
+def test_refresh_mobile_access_token_rejects_expired_token(monkeypatch):
+    refresh_record = SimpleNamespace(
+        user_id=7,
+        token_hash=auth.hash_mobile_refresh_token("refresh-token"),
+        expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+        revoked_at=None,
+        last_used_at=None,
+    )
+    session = FakeAuthSession(execute_result=FakeExecuteResult(one=refresh_record))
+    cleanup = override_auth_db(session)
+    monkeypatch.setattr(
+        auth,
+        "create_access_token",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("token created")),
+    )
+
+    try:
+        response = client.post(
+            "/auth/mobile-refresh",
+            json={"refresh_token": "refresh-token"},
+        )
+    finally:
+        cleanup()
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid or expired mobile refresh token"
+    assert refresh_record.last_used_at is None
+    assert session.committed is False
+
+
+def test_refresh_mobile_access_token_revokes_token_for_missing_user(monkeypatch):
+    refresh_record = SimpleNamespace(
+        user_id=7,
+        token_hash=auth.hash_mobile_refresh_token("refresh-token"),
+        expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+        revoked_at=None,
+        last_used_at=None,
+    )
+    session = FakeAuthSession(
+        execute_result=FakeExecuteResult(one=refresh_record),
+        get_result=None,
+    )
+    cleanup = override_auth_db(session)
+    monkeypatch.setattr(
+        auth,
+        "create_access_token",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("token created")),
+    )
+
+    try:
+        response = client.post(
+            "/auth/mobile-refresh",
+            json={"refresh_token": "refresh-token"},
+        )
+    finally:
+        cleanup()
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid or expired mobile refresh token"
+    assert refresh_record.revoked_at is not None
+    assert session.committed is True
+
+
+def test_mobile_logout_revokes_refresh_token():
+    refresh_record = SimpleNamespace(
+        token_hash=auth.hash_mobile_refresh_token("refresh-token"),
+        revoked_at=None,
+    )
+    session = FakeAuthSession(execute_result=FakeExecuteResult(one=refresh_record))
+    cleanup = override_auth_db(session)
+
+    try:
+        response = client.post(
+            "/auth/mobile-logout",
+            json={"refresh_token": "refresh-token"},
+        )
+    finally:
+        cleanup()
+
+    assert response.status_code == 200
+    assert response.json() == {"message": "Logged out"}
+    assert refresh_record.revoked_at is not None
+    assert session.committed is True
+
+
+def test_mobile_logout_without_token_is_idempotent():
+    session = FakeAuthSession()
+    cleanup = override_auth_db(session)
+
+    try:
+        response = client.post("/auth/mobile-logout", json={})
+    finally:
+        cleanup()
+
+    assert response.status_code == 200
+    assert response.json() == {"message": "Logged out"}
+    assert session.committed is False
 
 
 def test_exchange_mobile_auth_code_rejects_reused_code(monkeypatch):
