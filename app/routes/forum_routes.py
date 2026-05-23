@@ -3,7 +3,7 @@ import math
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, delete
+from sqlalchemy import select, func, delete, or_
 from typing import Literal, Optional, List
 
 from app.database import get_async_session
@@ -489,13 +489,16 @@ async def get_thread_posts_paged(
         )
         return out
 
-    # 2) Count top-level replies (parent IS NULL) excluding OP
+    # 2) Count top-level replies (parent IS NULL or direct reply to OP) excluding OP
     total_top_level = int(
         (
             await db.execute(
                 select(func.count(ForumPost.id)).where(
                     ForumPost.thread_id == thread_id,
-                    ForumPost.parent_id.is_(None),
+                    or_(
+                        ForumPost.parent_id.is_(None),
+                        ForumPost.parent_id == first_post.id,
+                    ),
                     ForumPost.id != first_post.id,
                 )
             )
@@ -506,12 +509,17 @@ async def get_thread_posts_paged(
     page = min(page, total_pages)
 
     # 3) Page of top-level roots (stable order: oldest→newest)
+    #    Includes both null-parent posts and direct replies to the OP so the
+    #    frontend's "originalReplies" section is populated on reload.
     roots = (
         await db.execute(
             select(ForumPost)
             .where(
                 ForumPost.thread_id == thread_id,
-                ForumPost.parent_id.is_(None),
+                or_(
+                    ForumPost.parent_id.is_(None),
+                    ForumPost.parent_id == first_post.id,
+                ),
                 ForumPost.id != first_post.id,
             )
             .order_by(ForumPost.created_at.asc(), ForumPost.id.asc())
