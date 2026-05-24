@@ -13,7 +13,7 @@ from app.models.user_model import User
 
 from app.schemas.forum_schemas import (
     ForumThreadOut, ForumPostOut, CreateThreadIn, CreatePostIn, SeriesRefOut, ThreadSettingsIn, UpdatePostIn,
-    UpdateThreadIn, PageOut, ThreadPostsPageOut
+    UpdateThreadIn, PageOut, PostsPageOut, ThreadPostsPageOut
 )
 from app.utils.forum_content import reject_disallowed_images
 
@@ -1046,4 +1046,121 @@ async def set_post_vote(
         downvote_count=downvote_count,
     )
 
+
+# ------------------------------
+# Me endpoints (auth required)
+# ------------------------------
+
+@router.get("/me/threads", response_model=PageOut)
+async def get_my_threads(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """Paginated list of threads the signed-in user created."""
+    total_stmt = select(func.count(ForumThread.id)).where(
+        ForumThread.author_id == user.id
+    )
+    total = int((await db.execute(total_stmt)).scalar_one() or 0)
+
+    stmt = (
+        select(ForumThread)
+        .where(ForumThread.author_id == user.id)
+        .order_by(ForumThread.last_post_at.desc(), ForumThread.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    rows = (await db.execute(stmt)).scalars().all()
+    items = [await _thread_to_out(t, db) for t in rows]
+
+    total_pages = max(1, math.ceil(total / page_size))
+    return PageOut(
+        items=items,
+        page=page,
+        page_size=page_size,
+        total=total,
+        total_pages=total_pages,
+        has_prev=page > 1,
+        has_next=page < total_pages,
+    )
+
+
+@router.get("/me/posts", response_model=PostsPageOut)
+async def get_my_posts(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """Paginated list of posts (replies) the signed-in user has written."""
+    total_stmt = select(func.count(ForumPost.id)).where(
+        ForumPost.author_id == user.id
+    )
+    total = int((await db.execute(total_stmt)).scalar_one() or 0)
+
+    stmt = (
+        select(ForumPost)
+        .where(ForumPost.author_id == user.id)
+        .order_by(ForumPost.created_at.desc(), ForumPost.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    rows = (await db.execute(stmt)).scalars().all()
+    items = [await _post_to_out(p, db, user) for p in rows]
+
+    total_pages = max(1, math.ceil(total / page_size))
+    return PostsPageOut(
+        items=items,
+        page=page,
+        page_size=page_size,
+        total=total,
+        total_pages=total_pages,
+        has_prev=page > 1,
+        has_next=page < total_pages,
+    )
+
+
+@router.get("/me/votes", response_model=PostsPageOut)
+async def get_my_votes(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """Paginated list of posts the signed-in user has voted on (upvote or downvote)."""
+    total_stmt = select(func.count(ForumReaction.id)).where(
+        ForumReaction.user_id == user.id,
+        ForumReaction.kind.in_([UPVOTE, DOWNVOTE]),
+    )
+    total = int((await db.execute(total_stmt)).scalar_one() or 0)
+
+    reactions_stmt = (
+        select(ForumReaction)
+        .where(
+            ForumReaction.user_id == user.id,
+            ForumReaction.kind.in_([UPVOTE, DOWNVOTE]),
+        )
+        .order_by(ForumReaction.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    reactions = (await db.execute(reactions_stmt)).scalars().all()
+
+    items: list[ForumPostOut] = []
+    for reaction in reactions:
+        post = await db.get(ForumPost, reaction.post_id)
+        if post:
+            items.append(await _post_to_out(post, db, user))
+
+    total_pages = max(1, math.ceil(total / page_size))
+    return PostsPageOut(
+        items=items,
+        page=page,
+        page_size=page_size,
+        total=total,
+        total_pages=total_pages,
+        has_prev=page > 1,
+        has_next=page < total_pages,
+    )
 
