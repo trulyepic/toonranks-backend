@@ -502,6 +502,7 @@ def test_get_my_posts_returns_users_posts():
     assert body["total"] == 1
     assert len(body["items"]) == 1
     assert body["items"][0]["content_markdown"] == "Great chapter."
+    assert body["items"][0]["thread_id"] == 1
 
 
 def test_get_my_posts_returns_empty_state_when_user_has_no_posts():
@@ -566,6 +567,7 @@ def test_get_my_votes_returns_voted_posts():
     assert body["total"] == 1
     assert len(body["items"]) == 1
     assert body["items"][0]["content_markdown"] == "Great chapter."
+    assert body["items"][0]["thread_id"] == 1
 
 
 def test_get_my_votes_returns_empty_state_when_user_has_no_votes():

@@ -14,6 +14,7 @@ class SeriesRefOut(BaseModel):
 
 class ForumPostOut(BaseModel):
     id: int
+    thread_id: int = 0
     author_username: Optional[str] = None
     author_role: Optional[str] = None
     author_avatar_url: Optional[str] = None
