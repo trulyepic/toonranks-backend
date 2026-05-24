@@ -84,6 +84,16 @@ class PageOut(BaseModel):
     has_next: bool
 
 
+class PostsPageOut(BaseModel):
+    items: List[ForumPostOut]
+    page: int
+    page_size: int
+    total: int
+    total_pages: int
+    has_prev: bool
+    has_next: bool
+
+
 class ThreadPostsPageOut(BaseModel):
     thread: ForumThreadOut
     posts: List[ForumPostOut]         # OP first, then this page's roots + their descendants

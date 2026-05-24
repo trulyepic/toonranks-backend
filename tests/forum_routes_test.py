@@ -407,3 +407,188 @@ def test_toggle_heart_compatibility_maps_to_upvote():
 
     assert response.status_code == 200
     assert response.json() == {"hearted": True, "count": 1}
+
+
+# ------------------------------
+# /me/threads tests
+# ------------------------------
+
+def test_get_my_threads_returns_users_threads():
+    thread = thread_object(author_id=10)
+    user = SimpleNamespace(id=10, username="reader", role="GENERAL")
+    session = FakeForumSession(
+        results=[
+            FakeExecuteResult(scalar_one=1),          # count
+            FakeExecuteResult(rows=[thread]),          # page rows
+            FakeExecuteResult(rows=[]),                # _thread_to_out: series refs
+        ],
+        get_results={(User, 10): SimpleNamespace(
+            username="reader", role="GENERAL", avatar_url=None, avatar_preset="blue"
+        )},
+    )
+    cleanup = override_forum_dependencies(session, user=user)
+
+    try:
+        response = client.get("/forum/me/threads")
+    finally:
+        cleanup()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    assert body["total_pages"] == 1
+    assert body["has_prev"] is False
+    assert body["has_next"] is False
+    assert len(body["items"]) == 1
+    assert body["items"][0]["title"] == "Favorite fights"
+
+
+def test_get_my_threads_returns_empty_state_when_user_has_no_threads():
+    user = SimpleNamespace(id=10, username="reader", role="GENERAL")
+    session = FakeForumSession(
+        results=[
+            FakeExecuteResult(scalar_one=0),   # count
+            FakeExecuteResult(rows=[]),         # page rows (empty)
+        ],
+    )
+    cleanup = override_forum_dependencies(session, user=user)
+
+    try:
+        response = client.get("/forum/me/threads")
+    finally:
+        cleanup()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 0
+    assert body["total_pages"] == 1
+    assert body["items"] == []
+
+
+def test_get_my_threads_requires_auth():
+    response = client.get("/forum/me/threads")
+    assert response.status_code == 401
+
+
+# ------------------------------
+# /me/posts tests
+# ------------------------------
+
+def test_get_my_posts_returns_users_posts():
+    post = post_object(author_id=10)
+    user = SimpleNamespace(id=10, username="reader", role="GENERAL")
+    session = FakeForumSession(
+        results=[
+            FakeExecuteResult(scalar_one=1),   # count
+            FakeExecuteResult(rows=[post]),    # page rows
+            FakeExecuteResult(rows=[]),        # _post_to_out: series refs
+            FakeExecuteResult(scalar_one=0),   # _post_vote_bits: upvote count
+            FakeExecuteResult(scalar_one=0),   # _post_vote_bits: downvote count
+            FakeExecuteResult(first=None),     # _post_vote_bits: viewer vote
+        ],
+        get_results={(User, 10): SimpleNamespace(
+            username="reader", role="GENERAL", avatar_url=None, avatar_preset="blue"
+        )},
+    )
+    cleanup = override_forum_dependencies(session, user=user)
+
+    try:
+        response = client.get("/forum/me/posts")
+    finally:
+        cleanup()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    assert len(body["items"]) == 1
+    assert body["items"][0]["content_markdown"] == "Great chapter."
+
+
+def test_get_my_posts_returns_empty_state_when_user_has_no_posts():
+    user = SimpleNamespace(id=10, username="reader", role="GENERAL")
+    session = FakeForumSession(
+        results=[
+            FakeExecuteResult(scalar_one=0),   # count
+            FakeExecuteResult(rows=[]),         # page rows (empty)
+        ],
+    )
+    cleanup = override_forum_dependencies(session, user=user)
+
+    try:
+        response = client.get("/forum/me/posts")
+    finally:
+        cleanup()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 0
+    assert body["items"] == []
+
+
+def test_get_my_posts_requires_auth():
+    response = client.get("/forum/me/posts")
+    assert response.status_code == 401
+
+
+# ------------------------------
+# /me/votes tests
+# ------------------------------
+
+def test_get_my_votes_returns_voted_posts():
+    post = post_object(id=5, author_id=10)
+    reaction = SimpleNamespace(id=1, post_id=5, user_id=10, kind="UPVOTE")
+    user = SimpleNamespace(id=10, username="reader", role="GENERAL")
+    session = FakeForumSession(
+        results=[
+            FakeExecuteResult(scalar_one=1),       # count reactions
+            FakeExecuteResult(rows=[reaction]),    # page reactions
+            FakeExecuteResult(rows=[]),            # _post_to_out: series refs
+            FakeExecuteResult(scalar_one=0),       # _post_vote_bits: upvote count
+            FakeExecuteResult(scalar_one=0),       # _post_vote_bits: downvote count
+            FakeExecuteResult(first=None),         # _post_vote_bits: viewer vote
+        ],
+        get_results={
+            (ForumPost, 5): post,
+            (User, 10): SimpleNamespace(
+                username="reader", role="GENERAL", avatar_url=None, avatar_preset="blue"
+            ),
+        },
+    )
+    cleanup = override_forum_dependencies(session, user=user)
+
+    try:
+        response = client.get("/forum/me/votes")
+    finally:
+        cleanup()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    assert len(body["items"]) == 1
+    assert body["items"][0]["content_markdown"] == "Great chapter."
+
+
+def test_get_my_votes_returns_empty_state_when_user_has_no_votes():
+    user = SimpleNamespace(id=10, username="reader", role="GENERAL")
+    session = FakeForumSession(
+        results=[
+            FakeExecuteResult(scalar_one=0),   # count reactions
+            FakeExecuteResult(rows=[]),         # page reactions (empty)
+        ],
+    )
+    cleanup = override_forum_dependencies(session, user=user)
+
+    try:
+        response = client.get("/forum/me/votes")
+    finally:
+        cleanup()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 0
+    assert body["items"] == []
+
+
+def test_get_my_votes_requires_auth():
+    response = client.get("/forum/me/votes")
+    assert response.status_code == 401
