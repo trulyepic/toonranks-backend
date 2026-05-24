@@ -241,6 +241,7 @@ async def _post_to_out(p: ForumPost, db: AsyncSession, viewer: Optional["User"]=
 
     return ForumPostOut(
         id=p.id,
+        thread_id=p.thread_id,
         **_author_profile(author),
         content_markdown=p.content_markdown,
         created_at=str(p.created_at),
