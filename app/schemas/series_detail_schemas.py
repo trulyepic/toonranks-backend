@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 
 class SeriesDetailCreate(BaseModel):
     series_id: int
@@ -37,3 +37,27 @@ class SeriesDetailOut(BaseModel):
     model_config = {
         "from_attributes": True
     }
+
+
+class CategoryVoteOut(BaseModel):
+    category: str
+    score: int
+
+
+class MySeriesVoteOut(BaseModel):
+    series_id: int
+    title: Optional[str] = None
+    cover_url: Optional[str] = None
+    type: Optional[str] = None
+    status: Optional[str] = None
+    votes: List[CategoryVoteOut] = []
+
+
+class MySeriesVotesPageOut(BaseModel):
+    items: List[MySeriesVoteOut]
+    page: int
+    page_size: int
+    total: int
+    total_pages: int
+    has_prev: bool
+    has_next: bool
