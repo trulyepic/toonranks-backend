@@ -1,6 +1,7 @@
-from typing import Optional
+import math
+from typing import Optional, List
 
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, Request
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, Request, Query
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -8,7 +9,12 @@ from app.database import get_async_session
 from app.models.series_model import Series
 from app.models.series_detail import SeriesDetail
 from app.models.user_model import User
-from app.schemas.series_detail_schemas import SeriesDetailOut
+from app.schemas.series_detail_schemas import (
+    SeriesDetailOut,
+    CategoryVoteOut,
+    MySeriesVoteOut,
+    MySeriesVotesPageOut,
+)
 from app.s3 import upload_to_s3
 from app.models.user_vote import UserVote
 from app.utils.token_utils import get_current_user
@@ -159,6 +165,72 @@ async def vote_series_detail(
     await session.refresh(detail)
     return detail
 
+
+
+@router.get("/me/votes", response_model=MySeriesVotesPageOut)
+async def get_my_series_votes(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=50),
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """Return the paginated list of series the current user has voted on,
+    including every category score they submitted."""
+
+    # 1. Total distinct series voted on
+    count_result = await session.execute(
+        select(func.count(func.distinct(UserVote.series_id))).where(
+            UserVote.user_id == user.id
+        )
+    )
+    total = count_result.scalar_one()
+
+    # 2. Paginated distinct series ids, most-recent first (by series id)
+    ids_result = await session.execute(
+        select(UserVote.series_id)
+        .distinct()
+        .where(UserVote.user_id == user.id)
+        .order_by(UserVote.series_id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    series_ids: List[int] = [row[0] for row in ids_result.all()]
+
+    # 3. Build each item — one session.get + one votes query per series
+    items: List[MySeriesVoteOut] = []
+    for sid in series_ids:
+        series = await session.get(Series, sid)
+        votes_result = await session.execute(
+            select(UserVote).where(
+                UserVote.user_id == user.id,
+                UserVote.series_id == sid,
+            )
+        )
+        votes = votes_result.scalars().all()
+        items.append(
+            MySeriesVoteOut(
+                series_id=sid,
+                title=series.title if series else None,
+                cover_url=series.cover_url if series else None,
+                type=series.type.value if series and series.type else None,
+                status=series.status.value if series and series.status else None,
+                votes=[
+                    CategoryVoteOut(category=v.category, score=v.score)
+                    for v in votes
+                ],
+            )
+        )
+
+    total_pages = max(1, math.ceil(total / page_size)) if total > 0 else 1
+    return MySeriesVotesPageOut(
+        items=items,
+        page=page,
+        page_size=page_size,
+        total=total,
+        total_pages=total_pages,
+        has_prev=page > 1,
+        has_next=page < total_pages,
+    )
 
 
 @router.get("/{series_id}", response_model=SeriesDetailOut)
