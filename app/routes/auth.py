@@ -320,6 +320,7 @@ async def signup(request: Request, user: UserCreate, db: AsyncSession = Depends(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username already exists")
 
     hashed = bcrypt.hash(user.password)
+    platform = user.signup_platform if user.signup_platform in ("web", "mobile") else "web"
     new_user = User(
         username=username_norm,
         password=hashed,
@@ -327,6 +328,8 @@ async def signup(request: Request, user: UserCreate, db: AsyncSession = Depends(
         is_verified=False,
         avatar_preset=DEFAULT_AVATAR_PRESET,
         registered_at=datetime.now(timezone.utc),
+        signup_platform=platform,
+        auth_provider="email",
     )
 
     try:
@@ -418,6 +421,9 @@ async def google_oauth(payload: dict, db: AsyncSession = Depends(get_db)):
         user = result.scalars().first()
 
         if not user:
+            platform = payload.get("signup_platform", "web")
+            if platform not in ("web", "mobile"):
+                platform = "web"
             user = User(
                 email=email,
                 username=username,
@@ -426,6 +432,8 @@ async def google_oauth(payload: dict, db: AsyncSession = Depends(get_db)):
                 role="GENERAL",
                 avatar_preset=DEFAULT_AVATAR_PRESET,
                 registered_at=datetime.now(timezone.utc),
+                signup_platform=platform,
+                auth_provider="google",
             )
             db.add(user)
             await db.commit()

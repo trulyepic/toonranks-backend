@@ -7,6 +7,7 @@ class UserCreate(BaseModel):
     password: str
     email: EmailStr
     captcha_token: str
+    signup_platform: Optional[str] = "web"
 
     # @field_validator("email")
     @classmethod
