@@ -153,6 +153,34 @@ async def on_startup():
                 await conn.execute(
                     text(
                         """
+                        ALTER TABLE IF EXISTS man_review.users
+                        ADD COLUMN IF NOT EXISTS signup_platform VARCHAR(10)
+                        NOT NULL DEFAULT 'web'
+                        """
+                    )
+                )
+                await conn.execute(
+                    text(
+                        """
+                        ALTER TABLE IF EXISTS man_review.users
+                        ADD COLUMN IF NOT EXISTS auth_provider VARCHAR(10)
+                        NOT NULL DEFAULT 'email'
+                        """
+                    )
+                )
+                await conn.execute(
+                    text(
+                        """
+                        UPDATE man_review.users
+                        SET auth_provider = 'google'
+                        WHERE (password IS NULL OR password = '')
+                        AND auth_provider = 'email'
+                        """
+                    )
+                )
+                await conn.execute(
+                    text(
+                        """
                         UPDATE man_review.series
                         SET approval_status = 'APPROVED'
                         WHERE approval_status IS NULL

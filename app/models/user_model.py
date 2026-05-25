@@ -15,6 +15,8 @@ class User(Base):
     is_verified = Column(Boolean, default=False, nullable=False, server_default="false")
     avatar_url = Column(String, nullable=True)
     avatar_preset = Column(String, nullable=True, default="blue")
+    signup_platform = Column(String, nullable=False, default="web", server_default="web")
+    auth_provider = Column(String, nullable=False, default="email", server_default="email")
 
     registered_at = Column(DateTime(timezone=True), nullable=True)
 
