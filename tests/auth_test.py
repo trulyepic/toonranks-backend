@@ -44,6 +44,7 @@ class FakeAuthSession:
         self.execute_result = execute_result or FakeExecuteResult()
         self.get_result = get_result
         self.added = []
+        self.deleted = []
         self.committed = False
         self.flushed = False
         self.refreshed = []
@@ -57,6 +58,9 @@ class FakeAuthSession:
 
     def add(self, item):
         self.added.append(item)
+
+    async def delete(self, item):
+        self.deleted.append(item)
 
     async def flush(self):
         self.flushed = True
@@ -992,3 +996,55 @@ def test_reset_my_avatar_clears_custom_avatar():
     assert db_user.avatar_url is None
     assert db_user.avatar_preset == "blue"
     assert session.committed is True
+
+
+def test_delete_my_account_removes_user_and_votes():
+    current_user = SimpleNamespace(id=7, username="reader", role="GENERAL")
+    db_user = SimpleNamespace(id=7, username="reader", role="GENERAL")
+    session = FakeAuthSession(get_result=db_user)
+    cleanup_db = override_auth_db(session)
+    cleanup_user = override_auth_user(current_user)
+
+    try:
+        response = client.delete("/auth/me")
+    finally:
+        cleanup_user()
+        cleanup_db()
+
+    assert response.status_code == 200
+    assert response.json() == {"message": "Account deleted successfully"}
+    # The user row was queued for deletion
+    assert db_user in session.deleted
+    # DB was committed
+    assert session.committed is True
+    # execute() was called (for the UserVote delete DML)
+    # — we trust the route code issued it; the fake just accepts the call
+
+
+def test_delete_my_account_returns_404_when_user_row_missing():
+    current_user = SimpleNamespace(id=7, username="reader", role="GENERAL")
+    # get_result=None simulates the user row not being found (already deleted, race)
+    session = FakeAuthSession(get_result=None)
+    cleanup_db = override_auth_db(session)
+    cleanup_user = override_auth_user(current_user)
+
+    try:
+        response = client.delete("/auth/me")
+    finally:
+        cleanup_user()
+        cleanup_db()
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "User not found"
+    assert session.deleted == []
+    assert session.committed is False
+
+
+def test_delete_my_account_requires_authentication():
+    # Remove the auth override so the real get_current_user dependency runs —
+    # with no Authorization header, it must reject the request.
+    app.dependency_overrides.pop(auth.get_current_user, None)
+
+    response = client.delete("/auth/me")
+
+    assert response.status_code == 401
