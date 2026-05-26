@@ -295,6 +295,7 @@ async def get_ranked_series(
     page: int = Query(1, ge=1),
     page_size: int = Query(12, ge=1, le=50),
     type: Optional[str] = Query(None),
+    genre: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db)
 ):
     stmt = select(Series, SeriesDetail).join(
@@ -303,6 +304,9 @@ async def get_ranked_series(
 
     if type:
         stmt = stmt.where(Series.type == type.upper())
+
+    if genre:
+        stmt = stmt.where(Series.genre.ilike(f"%{genre}%"))
 
     query = await db.execute(stmt)
     results = query.all()
