@@ -1,6 +1,6 @@
 from fastapi import (APIRouter, Depends, HTTPException,
                      status, Query, Body, UploadFile, File)
-from sqlalchemy import func
+from sqlalchemy import delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import AsyncSessionLocal
 from app.email_service import send_password_reset_email, send_verification_email
@@ -28,6 +28,7 @@ from pydantic import BaseModel
 
 from app.models.mobile_auth_code import MobileAuthCode
 from app.models.mobile_refresh_token import MobileRefreshToken
+from app.models.user_vote import UserVote
 from app.utils.captcha import verify_captcha
 from app.utils.token_utils import create_access_token, get_current_user
 from app.utils.email_token_utils import (
@@ -731,3 +732,23 @@ async def reset_my_avatar(
     await db.commit()
     await db.refresh(user)
     return user_to_dict(user)
+
+
+@router.delete("/me")
+async def delete_my_account(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    user = await db.get(User, current_user.id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # UserVote rows have no FK cascade, so delete them before removing the user row.
+    # All other related rows (mobile tokens, reading lists, forum reactions) have
+    # ON DELETE CASCADE on the DB level. Forum threads and posts use SET NULL so
+    # community content is preserved with an anonymous author.
+    await db.execute(delete(UserVote).where(UserVote.user_id == user.id))
+    await db.delete(user)
+    await db.commit()
+
+    return {"message": "Account deleted successfully"}
