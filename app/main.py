@@ -6,7 +6,8 @@ import asyncio
 from sqlalchemy import text
 
 from app.routes import series_routes, auth, series_detail, reading_list_routes, issues_routes, forum_routes, \
-    forum_media_routes
+    forum_media_routes, favourite_routes
+from app.models import user_favourite  # noqa: F401 — registers model with Base
 
 from fastapi.responses import RedirectResponse, JSONResponse
 from app.routes import series_routes, auth, series_detail
@@ -74,6 +75,7 @@ app.include_router(issues_routes.router)
 app.include_router(forum_routes.router)
 app.include_router(sitemap.router)
 app.include_router(forum_media_routes.router)
+app.include_router(favourite_routes.router, prefix="/auth")
 
 # ✅ Run DB init on startup
 @app.on_event("startup")
@@ -184,6 +186,30 @@ async def on_startup():
                         UPDATE man_review.series
                         SET approval_status = 'APPROVED'
                         WHERE approval_status IS NULL
+                        """
+                    )
+                )
+                await conn.execute(
+                    text(
+                        """
+                        CREATE TABLE IF NOT EXISTS man_review.user_favourites (
+                            id SERIAL PRIMARY KEY,
+                            user_id INTEGER NOT NULL
+                                REFERENCES man_review.users(id) ON DELETE CASCADE,
+                            series_id INTEGER NOT NULL
+                                REFERENCES man_review.series(id) ON DELETE CASCADE,
+                            position INTEGER NOT NULL,
+                            CONSTRAINT uq_user_favourite_series
+                                UNIQUE (user_id, series_id)
+                        )
+                        """
+                    )
+                )
+                await conn.execute(
+                    text(
+                        """
+                        CREATE INDEX IF NOT EXISTS ix_user_favourites_user_id
+                            ON man_review.user_favourites (user_id)
                         """
                     )
                 )
