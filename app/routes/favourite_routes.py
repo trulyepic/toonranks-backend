@@ -13,7 +13,7 @@ from app.models.user_model import User
 
 router = APIRouter(prefix="/me/favourites", tags=["favourites"])
 
-MAX_FAVOURITES = 6
+MAX_FAVOURITES = 15
 
 
 # ── Schemas ──────────────────────────────────────────────────────────────────
