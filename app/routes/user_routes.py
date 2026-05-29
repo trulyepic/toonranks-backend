@@ -1,7 +1,8 @@
+import math
 from typing import List, Optional
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,6 +12,7 @@ from app.models.user_model import User
 from app.models.user_favourite import UserFavourite
 from app.models.series_model import Series
 from app.models.reading_list import ReadingList, ReadingListItem
+from app.models.forum_model import ForumPost
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -41,13 +43,89 @@ class PublicProfileOut(BaseModel):
     avatar_url: Optional[str]
     avatar_preset: Optional[str]
     registered_at: Optional[datetime]
+    cred_score: int
+    rank: Optional[int]
+    post_count: int
     favourites: List[PublicFavouriteOut]
     reading_lists: List[PublicReadingListOut]
 
     model_config = {"from_attributes": True}
 
 
+class LeaderboardUserOut(BaseModel):
+    rank: int
+    username: str
+    role: str
+    avatar_url: Optional[str]
+    avatar_preset: Optional[str]
+    cred_score: int
+    post_count: int
+
+    model_config = {"from_attributes": True}
+
+
+class LeaderboardPageOut(BaseModel):
+    items: List[LeaderboardUserOut]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
+
+@router.get("/leaderboard", response_model=LeaderboardPageOut)
+async def get_leaderboard(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Ranked list of Rankers ordered by cred_score descending.
+    Only users with cred_score > 0 appear.
+    """
+    # Total ranked users
+    total_stmt = select(func.count(User.id)).where(User.cred_score > 0)
+    total = int((await db.execute(total_stmt)).scalar_one() or 0)
+    total_pages = max(1, math.ceil(total / page_size))
+
+    # Page of ranked users with their post counts
+    offset = (page - 1) * page_size
+    stmt = (
+        select(
+            User,
+            func.count(ForumPost.id).label("post_count"),
+        )
+        .outerjoin(ForumPost, ForumPost.author_id == User.id)
+        .where(User.cred_score > 0)
+        .group_by(User.id)
+        .order_by(User.cred_score.desc(), User.id.asc())
+        .offset(offset)
+        .limit(page_size)
+    )
+    rows = (await db.execute(stmt)).all()
+
+    items = [
+        LeaderboardUserOut(
+            rank=offset + i + 1,
+            username=user.username,
+            role=user.role or "GENERAL",
+            avatar_url=user.avatar_url,
+            avatar_preset=user.avatar_preset,
+            cred_score=user.cred_score or 0,
+            post_count=int(post_count or 0),
+        )
+        for i, (user, post_count) in enumerate(rows)
+    ]
+
+    return LeaderboardPageOut(
+        items=items,
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages,
+    )
+
 
 @router.get("/{username}", response_model=PublicProfileOut)
 async def get_public_profile(
@@ -56,8 +134,8 @@ async def get_public_profile(
 ):
     """
     Public profile for any user — no auth required.
-    Returns username, role, avatar, join date, pinned favourites,
-    and public reading lists.
+    Returns username, role, avatar, join date, Cred Points, rank,
+    post count, pinned favourites, and public reading lists.
     """
     stmt = select(User).where(User.username == username)
     user = (await db.execute(stmt)).scalar_one_or_none()
@@ -67,6 +145,20 @@ async def get_public_profile(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"User '{username}' not found.",
         )
+
+    # ── Cred rank (None if score is 0) ───────────────────────────────────
+    cred_score = user.cred_score or 0
+    rank: Optional[int] = None
+    if cred_score > 0:
+        rank_stmt = select(func.count(User.id)).where(User.cred_score > cred_score)
+        users_above = int((await db.execute(rank_stmt)).scalar_one() or 0)
+        rank = users_above + 1
+
+    # ── Post count ────────────────────────────────────────────────────────
+    post_count_stmt = select(func.count(ForumPost.id)).where(
+        ForumPost.author_id == user.id
+    )
+    post_count = int((await db.execute(post_count_stmt)).scalar_one() or 0)
 
     # ── Pinned favourites ─────────────────────────────────────────────────
     fav_stmt = (
@@ -113,10 +205,13 @@ async def get_public_profile(
 
     return PublicProfileOut(
         username=user.username,
-        role=user.role,
+        role=user.role or "GENERAL",
         avatar_url=user.avatar_url,
         avatar_preset=user.avatar_preset,
         registered_at=user.registered_at,
+        cred_score=cred_score,
+        rank=rank,
+        post_count=post_count,
         favourites=favourites,
         reading_lists=reading_lists,
     )

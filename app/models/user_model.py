@@ -19,6 +19,7 @@ class User(Base):
     auth_provider = Column(String, nullable=False, default="email", server_default="email")
 
     registered_at = Column(DateTime(timezone=True), nullable=True)
+    cred_score = Column(Integer, nullable=False, server_default="0", default=0)
 
     reading_lists = relationship("ReadingList", cascade="all, delete-orphan", backref="owner")
 

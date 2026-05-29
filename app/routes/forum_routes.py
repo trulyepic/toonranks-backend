@@ -1039,6 +1039,25 @@ async def set_post_vote(
     post.upvote_count = upvote_count
     post.downvote_count = downvote_count
     post.heart_count = upvote_count
+
+    # ── Adjust author's cred_score in real time ────────────────────────────
+    # Formula: upvotes are worth +2, downvotes are worth -1
+    if post.author_id:
+        delta = 0
+        if existing_vote == UPVOTE:
+            delta -= 2   # removing a previously counted upvote
+        elif existing_vote == DOWNVOTE:
+            delta += 1   # removing a previously counted downvote
+        if viewer_vote == UPVOTE:
+            delta += 2   # new upvote added
+        elif viewer_vote == DOWNVOTE:
+            delta -= 1   # new downvote added
+
+        if delta != 0:
+            author = await db.get(User, post.author_id)
+            if author is not None:
+                author.cred_score = max(0, (author.cred_score or 0) + delta)
+
     await db.commit()
 
     return ForumVoteOut(
