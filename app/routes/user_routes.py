@@ -86,8 +86,11 @@ async def get_leaderboard(
     Ranked list of Rankers ordered by cred_score descending.
     Only users with cred_score > 0 appear.
     """
-    # Total ranked users
-    total_stmt = select(func.count(User.id)).where(User.cred_score > 0)
+    # Total ranked users (admins excluded)
+    total_stmt = select(func.count(User.id)).where(
+        User.cred_score > 0,
+        User.role != "ADMIN",
+    )
     total = int((await db.execute(total_stmt)).scalar_one() or 0)
     total_pages = max(1, math.ceil(total / page_size))
 
@@ -101,7 +104,7 @@ async def get_leaderboard(
         )
         .outerjoin(ForumPost, ForumPost.author_id == User.id)
         .outerjoin(UserVote, UserVote.user_id == User.id)
-        .where(User.cred_score > 0)
+        .where(User.cred_score > 0, User.role != "ADMIN")
         .group_by(User.id)
         .order_by(User.cred_score.desc(), User.id.asc())
         .offset(offset)
@@ -151,11 +154,14 @@ async def get_public_profile(
             detail=f"User '{username}' not found.",
         )
 
-    # ── Cred rank (None if score is 0) ───────────────────────────────────
+    # ── Cred rank (None for admins and users with score 0) ───────────────
     cred_score = user.cred_score or 0
     rank: Optional[int] = None
-    if cred_score > 0:
-        rank_stmt = select(func.count(User.id)).where(User.cred_score > cred_score)
+    if cred_score > 0 and user.role != "ADMIN":
+        rank_stmt = select(func.count(User.id)).where(
+            User.cred_score > cred_score,
+            User.role != "ADMIN",
+        )
         users_above = int((await db.execute(rank_stmt)).scalar_one() or 0)
         rank = users_above + 1
 
