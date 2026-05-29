@@ -1,6 +1,10 @@
 
+import re
+
 from pydantic import BaseModel, EmailStr, field_validator
 from typing import Optional
+
+USERNAME_RE = re.compile(r"^[A-Za-z0-9_-]{3,20}$")
 
 class UserCreate(BaseModel):
     username: str
@@ -63,5 +67,31 @@ class ForgotPasswordRequest(BaseModel):
 class ResetPasswordRequest(BaseModel):
     token: str
     password: str
+
+
+class UsernameUpdateRequest(BaseModel):
+    new_username: str
+    current_password: str
+
+    @field_validator("new_username")
+    @classmethod
+    def validate_new_username(cls, v: str) -> str:
+        v = v.strip()
+        if not USERNAME_RE.match(v):
+            raise ValueError(
+                "Username must be 3–20 characters and contain only letters, "
+                "numbers, underscores, or hyphens."
+            )
+        return v
+
+
+class UsernameUpdateOut(BaseModel):
+    id: int
+    username: str
+    role: str
+    avatar_url: Optional[str] = None
+    avatar_preset: Optional[str] = None
+
+    model_config = {"from_attributes": True}
 
 
