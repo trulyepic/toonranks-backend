@@ -323,6 +323,11 @@ request: Request,
     thread.post_count = 1
     thread.last_post_at = func.now()
 
+    # +2 CP for starting a thread
+    thread_author = await db.get(User, user.id)
+    if thread_author is not None:
+        thread_author.cred_score = max(0, (thread_author.cred_score or 0) + 2)
+
     await db.commit()
     await db.refresh(thread)
 
@@ -663,6 +668,11 @@ request: Request,
     thread.post_count = (thread.post_count or 0) + 1
     thread.last_post_at = func.now()
 
+    # +1 CP for posting a reply
+    reply_author = await db.get(User, user.id)
+    if reply_author is not None:
+        reply_author.cred_score = max(0, (reply_author.cred_score or 0) + 1)
+
     await db.commit()
     await db.refresh(post)
 
@@ -728,6 +738,15 @@ async def delete_post(
     if not thread:
         raise HTTPException(status_code=404, detail="Thread not found")
 
+    # Reverse CP for this reply before deleting
+    if post.author_id:
+        post_author = await db.get(User, post.author_id)
+        if post_author is not None:
+            post_upvotes = int(getattr(post, "upvote_count", 0) or 0)
+            post_downvotes = int(getattr(post, "downvote_count", 0) or 0)
+            delta = -1 - (post_upvotes * 2) + post_downvotes
+            post_author.cred_score = max(0, (post_author.cred_score or 0) + delta)
+
     await db.delete(post)   # cascades to children via ON DELETE CASCADE
     await db.flush()
 
@@ -763,6 +782,34 @@ async def delete_thread(
     if not (_is_admin(user) or thread.author_id == user.id):
         raise HTTPException(status_code=403, detail="Admins or the thread owner may delete this thread.")
 
+    # Reverse CP for every post in the thread before the cascade delete
+    all_posts = (
+        await db.execute(
+            select(ForumPost).where(ForumPost.thread_id == thread_id)
+        )
+    ).scalars().all()
+
+    if all_posts:
+        # The OP is the earliest post — thread creation gave the author +2 (not +1)
+        op_id = min(all_posts, key=lambda p: (p.created_at, p.id)).id
+        user_cache: dict[int, User] = {}
+
+        for p in all_posts:
+            if not p.author_id:
+                continue
+            if p.author_id not in user_cache:
+                fetched = await db.get(User, p.author_id)
+                if fetched is None:
+                    continue
+                user_cache[p.author_id] = fetched
+            p_author = user_cache[p.author_id]
+            post_upvotes = int(getattr(p, "upvote_count", 0) or 0)
+            post_downvotes = int(getattr(p, "downvote_count", 0) or 0)
+            # OP author loses thread-creation credit (2); reply authors lose reply credit (1)
+            post_credit = 2 if p.id == op_id else 1
+            delta = -post_credit - (post_upvotes * 2) + post_downvotes
+            p_author.cred_score = max(0, (p_author.cred_score or 0) + delta)
+
     await db.delete(thread)  # cascades to posts + series refs
     await db.commit()
     return Response(status_code=204)
@@ -782,6 +829,15 @@ async def delete_my_post(
     # must be author or admin
     if (user.role or "").upper() != "ADMIN" and post.author_id != user.id:
         raise HTTPException(status_code=403, detail="Not allowed")
+
+    # Reverse CP for this reply before deleting
+    if post.author_id:
+        post_author = await db.get(User, post.author_id)
+        if post_author is not None:
+            post_upvotes = int(getattr(post, "upvote_count", 0) or 0)
+            post_downvotes = int(getattr(post, "downvote_count", 0) or 0)
+            delta = -1 - (post_upvotes * 2) + post_downvotes
+            post_author.cred_score = max(0, (post_author.cred_score or 0) + delta)
 
     await db.delete(post)
     await db.flush()
@@ -995,6 +1051,13 @@ async def set_post_vote(
     post = await db.get(ForumPost, post_id)
     if not post or post.thread_id != thread_id:
         raise HTTPException(status_code=404, detail="Post not found")
+
+    # Block self-voting — can't vote on your own posts
+    if post.author_id and post.author_id == user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You cannot vote on your own posts.",
+        )
 
     # Reactions are allowed on locked threads per product note.
 

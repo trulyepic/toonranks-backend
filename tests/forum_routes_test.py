@@ -170,6 +170,7 @@ def test_create_thread_creates_thread_first_post_and_series_refs():
                 role="CONTRIBUTOR",
                 avatar_url="https://cdn.example.com/avatar.webp",
                 avatar_preset="emerald",
+                cred_score=0,
             )
         },
     )
@@ -261,6 +262,7 @@ def test_create_post_returns_author_avatar_metadata():
                 role="ADMIN",
                 avatar_url=None,
                 avatar_preset="amber",
+                cred_score=0,
             ),
         },
     )
@@ -301,7 +303,7 @@ def test_delete_thread_rejects_non_owner_non_admin_user():
 
 
 def test_set_post_vote_adds_upvote_and_returns_counts():
-    post = post_object(upvote_count=0, downvote_count=0, heart_count=0)
+    post = post_object(author_id=99, upvote_count=0, downvote_count=0, heart_count=0)
     session = FakeForumSession(
         results=[FakeExecuteResult(first=None)],
         get_results={(ForumPost, 5): post},
@@ -334,7 +336,7 @@ def test_set_post_vote_adds_upvote_and_returns_counts():
 
 
 def test_set_post_vote_switches_upvote_to_downvote():
-    post = post_object(upvote_count=1, downvote_count=0, heart_count=1)
+    post = post_object(author_id=99, upvote_count=1, downvote_count=0, heart_count=1)
     existing = ForumReaction(post_id=5, user_id=10, kind="UPVOTE")
     session = FakeForumSession(
         results=[FakeExecuteResult(first=existing)],
@@ -364,7 +366,7 @@ def test_set_post_vote_switches_upvote_to_downvote():
 
 
 def test_set_post_vote_toggles_same_vote_off():
-    post = post_object(upvote_count=1, downvote_count=0, heart_count=1)
+    post = post_object(author_id=99, upvote_count=1, downvote_count=0, heart_count=1)
     existing = ForumReaction(post_id=5, user_id=10, kind="UPVOTE")
     session = FakeForumSession(
         results=[FakeExecuteResult(first=existing)],
@@ -393,7 +395,7 @@ def test_set_post_vote_toggles_same_vote_off():
 
 
 def test_toggle_heart_compatibility_maps_to_upvote():
-    post = post_object(upvote_count=0, downvote_count=0, heart_count=0)
+    post = post_object(author_id=99, upvote_count=0, downvote_count=0, heart_count=0)
     session = FakeForumSession(
         results=[FakeExecuteResult(first=None)],
         get_results={(ForumPost, 5): post},
