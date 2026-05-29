@@ -766,23 +766,10 @@ async def update_my_username(
 ):
     """
     Change the authenticated user's username.
-    Requires the current password to confirm identity.
+    JWT authentication is sufficient proof of identity — no password required.
+    Works for both email/password accounts and Google OAuth accounts.
     Usernames must be 3–20 chars: letters, numbers, underscores, or hyphens.
     """
-    # Verify the current password — Google-OAuth accounts have an empty password hash,
-    # so block username changes for those accounts (they have no password to verify with).
-    if not current_user.password:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Username changes are not supported for accounts created via Google sign-in.",
-        )
-
-    if not bcrypt.verify(payload.current_password, current_user.password):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Current password is incorrect.",
-        )
-
     new_username = payload.new_username  # already validated and stripped by the schema
 
     # No-op if the username is unchanged
