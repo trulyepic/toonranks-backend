@@ -13,6 +13,7 @@ from app.models.user_favourite import UserFavourite
 from app.models.series_model import Series
 from app.models.reading_list import ReadingList, ReadingListItem
 from app.models.forum_model import ForumPost
+from app.models.user_vote import UserVote
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -60,6 +61,7 @@ class LeaderboardUserOut(BaseModel):
     avatar_preset: Optional[str]
     cred_score: int
     post_count: int
+    series_rated: int
 
     model_config = {"from_attributes": True}
 
@@ -89,14 +91,16 @@ async def get_leaderboard(
     total = int((await db.execute(total_stmt)).scalar_one() or 0)
     total_pages = max(1, math.ceil(total / page_size))
 
-    # Page of ranked users with their post counts
+    # Page of ranked users with post counts and distinct series rated
     offset = (page - 1) * page_size
     stmt = (
         select(
             User,
             func.count(ForumPost.id).label("post_count"),
+            func.count(func.distinct(UserVote.series_id)).label("series_rated"),
         )
         .outerjoin(ForumPost, ForumPost.author_id == User.id)
+        .outerjoin(UserVote, UserVote.user_id == User.id)
         .where(User.cred_score > 0)
         .group_by(User.id)
         .order_by(User.cred_score.desc(), User.id.asc())
@@ -114,8 +118,9 @@ async def get_leaderboard(
             avatar_preset=user.avatar_preset,
             cred_score=user.cred_score or 0,
             post_count=int(post_count or 0),
+            series_rated=int(series_rated or 0),
         )
-        for i, (user, post_count) in enumerate(rows)
+        for i, (user, post_count, series_rated) in enumerate(rows)
     ]
 
     return LeaderboardPageOut(
