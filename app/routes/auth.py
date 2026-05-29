@@ -18,6 +18,8 @@ from app.schemas.user_schemas import (
     UserLogin,
     UserOut,
     UserRoleUpdate,
+    UsernameUpdateRequest,
+    UsernameUpdateOut,
 )
 from sqlalchemy.future import select
 from passlib.hash import bcrypt
@@ -752,3 +754,53 @@ async def delete_my_account(
     await db.commit()
 
     return {"message": "Account deleted successfully"}
+
+
+@router.patch("/me/username", response_model=UsernameUpdateOut)
+@limiter.limit("5/hour")
+async def update_my_username(
+    request: Request,
+    payload: UsernameUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Change the authenticated user's username.
+    Requires the current password to confirm identity.
+    Usernames must be 3–20 chars: letters, numbers, underscores, or hyphens.
+    """
+    # Verify the current password — Google-OAuth accounts have an empty password hash,
+    # so block username changes for those accounts (they have no password to verify with).
+    if not current_user.password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Username changes are not supported for accounts created via Google sign-in.",
+        )
+
+    if not bcrypt.verify(payload.current_password, current_user.password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Current password is incorrect.",
+        )
+
+    new_username = payload.new_username  # already validated and stripped by the schema
+
+    # No-op if the username is unchanged
+    if new_username == current_user.username:
+        return current_user
+
+    # Check uniqueness (case-sensitive, consistent with signup behaviour)
+    existing = await db.execute(
+        select(User).where(User.username == new_username)
+    )
+    if existing.scalar_one_or_none() is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="That username is already taken.",
+        )
+
+    current_user.username = new_username
+    await db.commit()
+    await db.refresh(current_user)
+
+    return current_user
