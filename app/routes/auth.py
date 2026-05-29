@@ -786,8 +786,11 @@ async def update_my_username(
             detail="That username is already taken.",
         )
 
-    current_user.username = new_username
+    # Load into the db session — current_user comes from get_current_user's
+    # own session and is not persistent in db, so we must re-fetch it here.
+    user = await get_user_for_update(current_user, db)
+    user.username = new_username
     await db.commit()
-    await db.refresh(current_user)
+    await db.refresh(user)
 
-    return current_user
+    return user
