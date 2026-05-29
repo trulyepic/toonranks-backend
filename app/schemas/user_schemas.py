@@ -71,7 +71,6 @@ class ResetPasswordRequest(BaseModel):
 
 class UsernameUpdateRequest(BaseModel):
     new_username: str
-    current_password: str
 
     @field_validator("new_username")
     @classmethod
