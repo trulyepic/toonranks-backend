@@ -168,3 +168,41 @@ class ForumReaction(Base):
     # Valid values: UPVOTE, DOWNVOTE. Legacy HEART rows should be migrated to UPVOTE.
     kind = Column(String(20), nullable=False, server_default="UPVOTE")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class ForumReport(Base):
+    __tablename__ = "forum_reports"
+    __table_args__ = (
+        UniqueConstraint("post_id", "reporter_id", name="uq_forum_report_post_reporter"),
+        {"schema": SCHEMA},
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    post_id = Column(
+        Integer,
+        ForeignKey(f"{SCHEMA}.forum_posts.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    thread_id = Column(
+        Integer,
+        ForeignKey(f"{SCHEMA}.forum_threads.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    reporter_id = Column(
+        Integer,
+        ForeignKey(f"{SCHEMA}.users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    reason = Column(String(500), nullable=True)
+    # OPEN → admin has not reviewed; REVIEWED → action taken; DISMISSED → no action needed
+    status = Column(String(20), nullable=False, server_default="OPEN")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    reviewed_at = Column(DateTime(timezone=True), nullable=True)
+    reviewed_by_id = Column(
+        Integer,
+        ForeignKey(f"{SCHEMA}.users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
