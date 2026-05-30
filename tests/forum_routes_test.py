@@ -488,6 +488,7 @@ def test_get_my_posts_returns_users_posts():
             FakeExecuteResult(scalar_one=0),   # _post_vote_bits: upvote count
             FakeExecuteResult(scalar_one=0),   # _post_vote_bits: downvote count
             FakeExecuteResult(first=None),     # _post_vote_bits: viewer vote
+            FakeExecuteResult(first=None),     # _post_to_out: bookmark check
         ],
         get_results={(User, 10): SimpleNamespace(
             username="reader", role="GENERAL", avatar_url=None, avatar_preset="blue"
@@ -550,6 +551,7 @@ def test_get_my_votes_returns_voted_posts():
             FakeExecuteResult(scalar_one=0),       # _post_vote_bits: upvote count
             FakeExecuteResult(scalar_one=0),       # _post_vote_bits: downvote count
             FakeExecuteResult(first=None),         # _post_vote_bits: viewer vote
+            FakeExecuteResult(first=None),         # _post_to_out: bookmark check
         ],
         get_results={
             (ForumPost, 5): post,

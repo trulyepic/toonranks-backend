@@ -7,7 +7,7 @@ from sqlalchemy import select, func, delete, or_
 from typing import Literal, Optional, List
 
 from app.database import get_async_session
-from app.models.forum_model import ForumThread, ForumPost, ForumSeriesRef, ForumReaction, ForumReport
+from app.models.forum_model import ForumThread, ForumPost, ForumSeriesRef, ForumReaction, ForumReport, ForumFollower, ForumBookmark
 from app.models.series_model import Series
 from app.models.user_model import User
 
@@ -15,6 +15,7 @@ from app.schemas.forum_schemas import (
     ForumThreadOut, ForumPostOut, CreateThreadIn, CreatePostIn, SeriesRefOut, ThreadSettingsIn, UpdatePostIn,
     UpdateThreadIn, PageOut, PostsPageOut, ThreadPostsPageOut,
     ForumReportIn, ForumReportReviewIn, ForumReportOut, ForumReportsPageOut,
+    FollowToggleOut, BookmarkToggleOut,
 )
 from app.utils.forum_content import reject_disallowed_images
 
@@ -184,7 +185,7 @@ async def get_current_user_optional(
 # ------------------------------
 # Mappers
 # ------------------------------
-async def _thread_to_out(t: ForumThread, db: AsyncSession) -> ForumThreadOut:
+async def _thread_to_out(t: ForumThread, db: AsyncSession, viewer_id: Optional[int] = None) -> ForumThreadOut:
     author = None
     if t.author_id:
         author = await db.get(User, t.author_id)
@@ -205,6 +206,16 @@ async def _thread_to_out(t: ForumThread, db: AsyncSession) -> ForumThreadOut:
         for (_ref, s) in refs.all()
     ]
 
+    viewer_is_following = False
+    if viewer_id:
+        follow_row = (await db.execute(
+            select(ForumFollower).where(
+                ForumFollower.thread_id == t.id,
+                ForumFollower.user_id == viewer_id,
+            ).limit(1)
+        )).scalars().first()
+        viewer_is_following = follow_row is not None
+
     return ForumThreadOut(
         id=t.id,
         title=t.title,
@@ -218,6 +229,7 @@ async def _thread_to_out(t: ForumThread, db: AsyncSession) -> ForumThreadOut:
         latest_first=bool(getattr(t, "latest_first", False)),
         is_pinned=bool(getattr(t, "is_pinned", False)),
         view_count=int(getattr(t, "view_count", 0) or 0),
+        viewer_is_following=viewer_is_following,
     )
 
 async def _post_to_out(p: ForumPost, db: AsyncSession, viewer: Optional["User"]=None) -> ForumPostOut:
@@ -246,6 +258,17 @@ async def _post_to_out(p: ForumPost, db: AsyncSession, viewer: Optional["User"]=
     )
     resolved_upvotes = int(getattr(p, "upvote_count", upvote_count) or upvote_count)
 
+    viewer_has_bookmarked = False
+    viewer_id = getattr(viewer, "id", None)
+    if viewer_id:
+        bookmark_row = (await db.execute(
+            select(ForumBookmark).where(
+                ForumBookmark.post_id == p.id,
+                ForumBookmark.user_id == viewer_id,
+            ).limit(1)
+        )).scalars().first()
+        viewer_has_bookmarked = bookmark_row is not None
+
     return ForumPostOut(
         id=p.id,
         thread_id=p.thread_id,
@@ -260,6 +283,7 @@ async def _post_to_out(p: ForumPost, db: AsyncSession, viewer: Optional["User"]=
         viewer_vote=viewer_vote,
         heart_count=resolved_upvotes,
         viewer_has_hearted=viewer_vote == UPVOTE,
+        viewer_has_bookmarked=viewer_has_bookmarked,
     )
 
 # ------------------------------
@@ -1427,3 +1451,149 @@ async def review_report(
     await db.commit()
     await db.refresh(report)
     return await _report_to_out(report, db)
+
+
+# ------------------------------
+# Thread following
+# ------------------------------
+
+@router.post("/threads/{thread_id}/follow", response_model=FollowToggleOut)
+@limiter.limit("30/minute")
+async def toggle_thread_follow(
+    request: Request,
+    thread_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """Toggle follow on a thread. Follow if not following; unfollow if already following."""
+    thread = await db.get(ForumThread, thread_id)
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    existing = (await db.execute(
+        select(ForumFollower).where(
+            ForumFollower.thread_id == thread_id,
+            ForumFollower.user_id == user.id,
+        ).limit(1)
+    )).scalars().first()
+
+    if existing:
+        await db.delete(existing)
+        following = False
+    else:
+        db.add(ForumFollower(thread_id=thread_id, user_id=user.id))
+        following = True
+
+    await db.commit()
+
+    follower_count = int((await db.execute(
+        select(func.count(ForumFollower.id)).where(ForumFollower.thread_id == thread_id)
+    )).scalar_one() or 0)
+
+    return FollowToggleOut(following=following, follower_count=follower_count)
+
+
+@router.get("/me/following", response_model=PageOut)
+async def get_my_following(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """Paginated list of threads the signed-in user is following."""
+    total_stmt = select(func.count(ForumFollower.id)).where(ForumFollower.user_id == user.id)
+    total = int((await db.execute(total_stmt)).scalar_one() or 0)
+
+    rows = (await db.execute(
+        select(ForumThread)
+        .join(ForumFollower, ForumFollower.thread_id == ForumThread.id)
+        .where(ForumFollower.user_id == user.id)
+        .order_by(ForumFollower.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )).scalars().all()
+
+    items = [await _thread_to_out(t, db, viewer_id=user.id) for t in rows]
+    total_pages = max(1, math.ceil(total / page_size))
+    return PageOut(
+        items=items,
+        page=page,
+        page_size=page_size,
+        total=total,
+        total_pages=total_pages,
+        has_prev=page > 1,
+        has_next=page < total_pages,
+    )
+
+
+# ------------------------------
+# Post bookmarking
+# ------------------------------
+
+@router.post("/threads/{thread_id}/posts/{post_id}/bookmark", response_model=BookmarkToggleOut)
+@limiter.limit("60/minute")
+async def toggle_post_bookmark(
+    request: Request,
+    thread_id: int,
+    post_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """Toggle bookmark on a post. Bookmark if not bookmarked; remove if already bookmarked."""
+    post = await db.get(ForumPost, post_id)
+    if not post or post.thread_id != thread_id:
+        raise HTTPException(status_code=404, detail="Post not found")
+
+    existing = (await db.execute(
+        select(ForumBookmark).where(
+            ForumBookmark.post_id == post_id,
+            ForumBookmark.user_id == user.id,
+        ).limit(1)
+    )).scalars().first()
+
+    if existing:
+        await db.delete(existing)
+        bookmarked = False
+    else:
+        db.add(ForumBookmark(post_id=post_id, thread_id=thread_id, user_id=user.id))
+        bookmarked = True
+
+    await db.commit()
+    return BookmarkToggleOut(bookmarked=bookmarked)
+
+
+@router.get("/me/bookmarks", response_model=PostsPageOut)
+async def get_my_bookmarks(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """Paginated list of posts the signed-in user has bookmarked, newest bookmark first."""
+    total_stmt = select(func.count(ForumBookmark.id)).where(ForumBookmark.user_id == user.id)
+    total = int((await db.execute(total_stmt)).scalar_one() or 0)
+
+    bookmarks = (await db.execute(
+        select(ForumBookmark)
+        .where(ForumBookmark.user_id == user.id)
+        .order_by(ForumBookmark.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )).scalars().all()
+
+    items: list[ForumPostOut] = []
+    for bm in bookmarks:
+        post = await db.get(ForumPost, bm.post_id)
+        if post:
+            items.append(await _post_to_out(post, db, user))
+
+    total_pages = max(1, math.ceil(total / page_size))
+    return PostsPageOut(
+        items=items,
+        page=page,
+        page_size=page_size,
+        total=total,
+        total_pages=total_pages,
+        has_prev=page > 1,
+        has_next=page < total_pages,
+    )

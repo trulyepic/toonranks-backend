@@ -28,6 +28,9 @@ complexity. The frontend companion doc is at `toonranks-frontend/FORUM_IMPROVEME
 | `ForumSeriesRef` | `id`, `thread_id`, `post_id`, `series_id` |
 | `ForumReaction` | `id`, `post_id`, `user_id`, `kind` (UPVOTE/DOWNVOTE/HEART) |
 | `ForumMedia` | `id`, `user_id`, `thread_id`, `post_id`, `url`, `mime_type`, `size_bytes`, `width`, `height` |
+| `ForumReport` | `id`, `post_id`, `thread_id`, `reporter_id`, `reason`, `status` (OPEN/REVIEWED/DISMISSED), `reviewed_at`, `reviewed_by_id` |
+| `ForumFollower` | `id`, `thread_id`, `user_id`, `created_at` |
+| `ForumBookmark` | `id`, `post_id`, `thread_id`, `user_id`, `created_at` |
 
 **Current endpoints:**
 
@@ -57,6 +60,10 @@ complexity. The frontend companion doc is at `toonranks-frontend/FORUM_IMPROVEME
 | `POST` | `/forum/threads/{thread_id}/posts/{post_id}/report` | Required | Rate: `5/hr`; blocks self-report and duplicates |
 | `GET` | `/forum/reports` | Admin only | Paginated moderation queue; filterable by status |
 | `PATCH` | `/forum/reports/{report_id}` | Admin only | Mark report REVIEWED or DISMISSED |
+| `POST` | `/forum/threads/{thread_id}/follow` | Required | Toggle follow; rate: `30/min`; returns `{ following, follower_count }` |
+| `GET` | `/forum/me/following` | Required | Paginated threads user is following; `PageOut` |
+| `POST` | `/forum/threads/{thread_id}/posts/{post_id}/bookmark` | Required | Toggle bookmark; rate: `60/min`; returns `{ bookmarked }` |
+| `GET` | `/forum/me/bookmarks` | Required | Paginated bookmarked posts; `PostsPageOut` |
 
 **Cred score formula:**
 - `+2` when user creates a thread
@@ -113,7 +120,7 @@ No migration required.
 
 ## ✅ Phase 3: Post Reporting
 
-Suggested branch: `backend-forum-post-reporting` — **complete, pending merge**
+Suggested branch: `backend-forum-post-reporting` — **merged and deployed**
 
 Migration applied: `FORUM_REPORTS_MIGRATION.sql`
 
@@ -132,9 +139,11 @@ Migration applied: `FORUM_REPORTS_MIGRATION.sql`
 
 ---
 
-## Phase 4: Thread Following and Post Bookmarking
+## ✅ Phase 4: Thread Following and Post Bookmarking
 
-Suggested branch: `backend-forum-follow-bookmark`
+Suggested branch: `backend-forum-follow-bookmark` — **complete, pending merge**
+
+Migration applied: `FORUM_FOLLOW_BOOKMARK_MIGRATION.sql`
 
 **Thread following** lets users subscribe to a thread and receive notifications when new posts
 arrive (notifications are wired up in Phase 6). **Post bookmarking** lets users save individual
@@ -202,7 +211,7 @@ class ForumBookmark(Base):
 
 ### 4c — Migration
 
-- [ ] Create Alembic migration for `man_review.forum_followers` and `man_review.forum_bookmarks`:
+- [x] Create migration SQL for `man_review.forum_followers` and `man_review.forum_bookmarks`:
   ```sql
   CREATE TABLE man_review.forum_followers (
       id SERIAL PRIMARY KEY,
@@ -226,24 +235,25 @@ class ForumBookmark(Base):
 
 Add to `app/routes/forum_routes.py`:
 
-- [ ] `POST /forum/threads/{thread_id}/follow` — toggle follow (follow if not following, unfollow if following)
+- [x] `POST /forum/threads/{thread_id}/follow` — toggle follow (follow if not following, unfollow if following)
   Returns `{ "following": bool, "follower_count": int }`.
-- [ ] Expose `viewer_is_following: bool` on `ForumThreadOut` when a viewer is authenticated.
+- [x] Expose `viewer_is_following: bool` on `ForumThreadOut` when a viewer is authenticated.
   Add an optional `viewer_is_following` field to `ForumThreadOut` schema (default `False`).
   In `_thread_to_out`, accept optional `viewer_id` parameter and query `ForumFollower` for it.
-- [ ] `GET /forum/me/following` — paginated list of threads the signed-in user follows.
+- [x] `GET /forum/me/following` — paginated list of threads the signed-in user follows.
   Response shape: same `PageOut` structure as `GET /forum/me/threads`.
 
 ### 4e — Bookmark endpoints
 
-- [ ] `POST /forum/threads/{thread_id}/posts/{post_id}/bookmark` — toggle bookmark.
+- [x] `POST /forum/threads/{thread_id}/posts/{post_id}/bookmark` — toggle bookmark.
   Returns `{ "bookmarked": bool }`.
-- [ ] Expose `viewer_has_bookmarked: bool` on `ForumPostOut` when viewer is authenticated.
-- [ ] `GET /forum/me/bookmarks` — paginated list of bookmarked posts.
+- [x] Expose `viewer_has_bookmarked: bool` on `ForumPostOut` when viewer is authenticated.
+- [x] `GET /forum/me/bookmarks` — paginated list of bookmarked posts.
   Response: `PostsPageOut` (same shape as `/forum/me/votes`).
 
 ### 4f — Tests
 
+- [x] Existing `/me/posts` and `/me/votes` tests updated to account for new bookmark query in `_post_to_out`
 - [ ] POST follow → follow created; POST again → follow removed (toggle)
 - [ ] GET `/forum/me/following` returns followed threads; empty list if none
 - [ ] POST bookmark → bookmark created; POST again → bookmark removed

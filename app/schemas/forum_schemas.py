@@ -29,6 +29,7 @@ class ForumPostOut(BaseModel):
     viewer_vote: Optional[str] = None
     heart_count: int = 0
     viewer_has_hearted: bool = False
+    viewer_has_bookmarked: bool = False  # True when the authenticated viewer has bookmarked this post
 
 
 class ForumThreadOut(BaseModel):
@@ -47,6 +48,7 @@ class ForumThreadOut(BaseModel):
     latest_first: bool = False
     is_pinned: bool = False
     view_count: int = 0
+    viewer_is_following: bool = False  # True when the authenticated viewer follows this thread
 
 
 class CreateThreadIn(BaseModel):
@@ -137,3 +139,12 @@ class ThreadPostsPageOut(BaseModel):
     total_pages: int
     has_prev: bool
     has_next: bool
+
+
+class FollowToggleOut(BaseModel):
+    following: bool
+    follower_count: int
+
+
+class BookmarkToggleOut(BaseModel):
+    bookmarked: bool
