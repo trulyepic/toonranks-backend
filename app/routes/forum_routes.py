@@ -517,7 +517,8 @@ async def list_threads_paged(
     stmt = stmt.offset((page - 1) * page_size).limit(page_size)
 
     rows = (await db.execute(stmt)).scalars().all()
-    items = [await _thread_to_out(t, db) for t in rows]
+    viewer_id = getattr(_viewer, "id", None)
+    items = [await _thread_to_out(t, db, viewer_id=viewer_id) for t in rows]
 
     total_pages = max(1, math.ceil(total / page_size))
     return PageOut(
@@ -558,7 +559,7 @@ async def get_thread(
     posts_out = [await _post_to_plain_dict(p, db, viewer) for p in posts]
 
     # ✅ Reuse the shared mapper so locked + latest_first + series_refs are all included
-    thread_out = await _thread_to_out(t, db)
+    thread_out = await _thread_to_out(t, db, viewer_id=getattr(viewer, "id", None))
 
     # If you want to be explicit, dump the Pydantic model into a dict
     return {
@@ -598,7 +599,7 @@ async def get_thread_posts_paged(
     if not first_post:
         # shouldn't happen, but be safe
         out = ThreadPostsPageOut(
-            thread=await _thread_to_out(t, db),
+            thread=await _thread_to_out(t, db, viewer_id=getattr(viewer, "id", None)),
             posts=[],
             page=page,
             page_size=page_size,
@@ -691,7 +692,7 @@ async def get_thread_posts_paged(
         walk(r)
 
     # 6) Map to output
-    thread_out = await _thread_to_out(t, db)
+    thread_out = await _thread_to_out(t, db, viewer_id=getattr(viewer, "id", None))
     posts_out: list[ForumPostOut] = []
     for m in ordered_models:
         posts_out.append(await _post_to_out(m, db, viewer))
