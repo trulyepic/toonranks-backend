@@ -6,8 +6,9 @@ import asyncio
 from sqlalchemy import text
 
 from app.routes import series_routes, auth, series_detail, reading_list_routes, issues_routes, forum_routes, \
-    forum_media_routes, favourite_routes, user_routes
+    forum_media_routes, favourite_routes, user_routes, notification_routes
 from app.models import user_favourite  # noqa: F401 — registers model with Base
+from app.models import notification_model  # noqa: F401 — registers Notification with Base
 
 from fastapi.responses import RedirectResponse, JSONResponse
 from app.routes import series_routes, auth, series_detail
@@ -77,6 +78,7 @@ app.include_router(sitemap.router)
 app.include_router(forum_media_routes.router)
 app.include_router(favourite_routes.router, prefix="/auth")
 app.include_router(user_routes.router)
+app.include_router(notification_routes.router)
 
 # ✅ Run DB init on startup
 @app.on_event("startup")

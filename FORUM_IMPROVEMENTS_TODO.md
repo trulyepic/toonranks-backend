@@ -32,6 +32,7 @@ complexity. The frontend companion doc is at `toonranks-frontend/FORUM_IMPROVEME
 | `ForumFollower` | `id`, `thread_id`, `user_id`, `created_at` |
 | `ForumBookmark` | `id`, `post_id`, `thread_id`, `user_id`, `created_at` |
 | `ForumCategory` | `id`, `name`, `slug`, `description`, `position`, `is_visible`, `created_at` |
+| `Notification` | `id`, `user_id`, `kind`, `is_read`, `created_at`, `read_at`, `thread_id`, `post_id`, `actor_id`, `summary` |
 
 **Current endpoints:**
 
@@ -69,6 +70,10 @@ complexity. The frontend companion doc is at `toonranks-frontend/FORUM_IMPROVEME
 | `POST` | `/forum/categories` | Admin only | Create category; 409 on duplicate name/slug |
 | `PATCH` | `/forum/categories/{id}` | Admin only | Update name, slug, description, position, visibility |
 | `DELETE` | `/forum/categories/{id}` | Admin only | Delete only if no threads; 409 otherwise |
+| `GET` | `/notifications` | Required | Paginated; `?unread_only=true`; includes `unread_count` in envelope |
+| `GET` | `/notifications/unread-count` | Required | Returns `{ count }` for badge polling |
+| `PATCH` | `/notifications/{id}/read` | Required | Mark single notification read |
+| `POST` | `/notifications/read-all` | Required | Mark all user notifications read |
 
 **Cred score formula:**
 - `+2` when user creates a thread
@@ -331,9 +336,11 @@ class ForumCategory(Base):
 
 ---
 
-## Phase 6: User @-mention Parsing and Notification System
+## ✅ Phase 6: User @-mention Parsing and Notification System
 
-Suggested branch: `backend-forum-notifications`
+Suggested branch: `backend-forum-notifications` — **complete, pending merge**
+
+Migration applied: `FORUM_NOTIFICATIONS_MIGRATION.sql`
 
 This is the highest-complexity phase. A notification system requires a new `Notification` model,
 a way to parse `@username` mentions in post content, and endpoints for reading/clearing
@@ -390,7 +397,7 @@ class Notification(Base):
 
 ### 6b — Migration
 
-- [ ] Create Alembic migration for `man_review.notifications`:
+- [x] Created `FORUM_NOTIFICATIONS_MIGRATION.sql` — `man_review.notifications` table with indexes on `(user_id, is_read)` and `created_at DESC`
   ```sql
   CREATE TABLE man_review.notifications (
       id SERIAL PRIMARY KEY,
@@ -410,138 +417,35 @@ class Notification(Base):
 
 ### 6c — @-mention parsing utility
 
-Create `app/utils/mention_utils.py`:
-
-```python
-import re
-from typing import List
-
-MENTION_RE = re.compile(r"@([A-Za-z0-9_-]{3,20})")
-
-def extract_mentions(text: str) -> List[str]:
-    """Return list of unique lowercased usernames mentioned in text."""
-    return list({m.lower() for m in MENTION_RE.findall(text)})
-```
+- [x] Created `app/utils/mention_utils.py` — `extract_mentions(text)` returns deduplicated lowercased usernames from `@username` patterns (3–20 chars)
 
 ### 6d — Notification trigger helpers
 
-Create `app/utils/notification_utils.py`:
-
-```python
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from app.models.notification_model import Notification
-from app.models.user_model import User
-from app.models.forum_model import ForumThread, ForumPost, ForumFollower
-from app.utils.mention_utils import extract_mentions
-
-async def notify_mentions(
-    content: str,
-    thread_id: int,
-    post_id: int,
-    actor_id: int,
-    db: AsyncSession,
-):
-    """Parse @mentions in content and create NOTIFICATION records."""
-    usernames = extract_mentions(content)
-    for username in usernames:
-        target = (await db.execute(
-            select(User).where(User.username.ilike(username))
-        )).scalars().first()
-        if target and target.id != actor_id:
-            db.add(Notification(
-                user_id=target.id,
-                kind="POST_MENTION",
-                thread_id=thread_id,
-                post_id=post_id,
-                actor_id=actor_id,
-                summary=f"mentioned you in a thread",
-            ))
-
-async def notify_thread_reply(
-    thread_id: int,
-    post_id: int,
-    actor_id: int,
-    db: AsyncSession,
-):
-    """Notify the thread author and all followers when a new reply is posted."""
-    thread = await db.get(ForumThread, thread_id)
-    if not thread:
-        return
-
-    notified: set[int] = {actor_id}  # never notify the replier about their own reply
-
-    # Notify thread author
-    if thread.author_id and thread.author_id not in notified:
-        db.add(Notification(
-            user_id=thread.author_id,
-            kind="THREAD_REPLY",
-            thread_id=thread_id,
-            post_id=post_id,
-            actor_id=actor_id,
-            summary="replied to your thread",
-        ))
-        notified.add(thread.author_id)
-
-    # Notify followers
-    followers = (await db.execute(
-        select(ForumFollower).where(ForumFollower.thread_id == thread_id)
-    )).scalars().all()
-    for f in followers:
-        if f.user_id not in notified:
-            db.add(Notification(
-                user_id=f.user_id,
-                kind="THREAD_FOLLOW_REPLY",
-                thread_id=thread_id,
-                post_id=post_id,
-                actor_id=actor_id,
-                summary="posted in a thread you follow",
-            ))
-            notified.add(f.user_id)
-```
+- [x] Created `app/utils/notification_utils.py`:
+  - `notify_thread_reply` — notifies thread author (THREAD_REPLY) and all followers (THREAD_FOLLOW_REPLY); never notifies the replier
+  - `notify_mentions` — parses `@mentions` and creates POST_MENTION notifications for each mentioned user (skips self-mentions)
 
 ### 6e — Wire notification triggers
 
-- [ ] In `create_post` in `forum_routes.py`, after `await db.flush()` and before `await db.commit()`:
-  ```python
-  from app.utils.notification_utils import notify_thread_reply, notify_mentions
-  await notify_thread_reply(thread_id, post.id, user.id, db)
-  await notify_mentions(payload.content_markdown, thread_id, post.id, user.id, db)
-  ```
-- [ ] In `update_post`, after editing: re-parse mentions in the new content to catch newly added
-  `@mentions`. Do not double-notify for mentions that were already in the original content.
+- [x] `create_post` now calls `notify_thread_reply` and `notify_mentions` after flush, before commit
+- [ ] `update_post` mention re-parsing (skipped for v1 — avoids double-notify complexity; deferred to post-launch)
 
 ### 6f — Notification endpoints
 
-Create `app/routes/notification_routes.py`:
+Created `app/routes/notification_routes.py`, registered in `app/main.py`:
 
-- [ ] `GET /notifications` — Auth required. Returns paginated unread notifications for the signed-in
-  user, newest first. Include `unread_count` in the response envelope.
-  ```python
-  class NotificationOut(BaseModel):
-      id: int
-      kind: str
-      is_read: bool
-      created_at: str
-      thread_id: Optional[int]
-      post_id: Optional[int]
-      actor_username: Optional[str]
-      summary: Optional[str]
-  ```
-- [ ] `PATCH /notifications/{notification_id}/read` — Mark a single notification as read.
-- [ ] `POST /notifications/read-all` — Mark all of the signed-in user's notifications as read.
-- [ ] `GET /notifications/unread-count` — Returns `{ "count": int }`. Lightweight endpoint for
-  polling the notification badge count without loading all notifications.
-- [ ] Register the router in `app/main.py` (wherever other routers are registered).
+- [x] `GET /notifications` — Auth required; paginated; supports `?unread_only=true`; includes `unread_count` in envelope
+- [x] `GET /notifications/unread-count` — Returns `{ "count": int }` for badge polling
+- [x] `PATCH /notifications/{id}/read` — Marks single notification read; sets `read_at` timestamp
+- [x] `POST /notifications/read-all` — Marks all user's unread notifications read in one UPDATE
 
 ### 6g — Tests
 
-- [ ] POST a reply with `@username` → notification row created for that user
-- [ ] Replying to your own thread creates a THREAD_REPLY notification for the thread author
-- [ ] Followers receive THREAD_FOLLOW_REPLY notifications
-- [ ] PATCH read → `is_read` and `read_at` set
-- [ ] POST read-all → all user's notifications marked read
-- [ ] GET `/notifications/unread-count` → correct count before and after read-all
+- [x] Existing `test_create_post_returns_author_avatar_metadata` updated for new followers query
+- [x] All 18 tests pass
+- [ ] POST reply with `@username` → POST_MENTION notification created
+- [ ] THREAD_REPLY and THREAD_FOLLOW_REPLY creation on reply
+- [ ] PATCH read / POST read-all / GET unread-count
 
 ---
 

@@ -771,6 +771,11 @@ request: Request,
     if reply_author is not None:
         reply_author.cred_score = max(0, (reply_author.cred_score or 0) + 1)
 
+    # Notify thread author + followers, and any @-mentioned users
+    from app.utils.notification_utils import notify_thread_reply, notify_mentions
+    await notify_thread_reply(thread_id, post.id, user.id, db)
+    await notify_mentions(payload.content_markdown, thread_id, post.id, user.id, db)
+
     await db.commit()
     await db.refresh(post)
 
