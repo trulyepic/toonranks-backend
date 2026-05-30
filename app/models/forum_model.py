@@ -206,3 +206,57 @@ class ForumReport(Base):
         ForeignKey(f"{SCHEMA}.users.id", ondelete="SET NULL"),
         nullable=True,
     )
+
+
+class ForumFollower(Base):
+    """Tracks which users are following which threads (for thread-reply notifications)."""
+    __tablename__ = "forum_followers"
+    __table_args__ = (
+        UniqueConstraint("thread_id", "user_id", name="uq_forum_follower_thread_user"),
+        {"schema": SCHEMA},
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    thread_id = Column(
+        Integer,
+        ForeignKey(f"{SCHEMA}.forum_threads.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id = Column(
+        Integer,
+        ForeignKey(f"{SCHEMA}.users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class ForumBookmark(Base):
+    """Tracks individual posts a user has bookmarked to revisit later."""
+    __tablename__ = "forum_bookmarks"
+    __table_args__ = (
+        UniqueConstraint("post_id", "user_id", name="uq_forum_bookmark_post_user"),
+        {"schema": SCHEMA},
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    post_id = Column(
+        Integer,
+        ForeignKey(f"{SCHEMA}.forum_posts.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    thread_id = Column(
+        Integer,
+        ForeignKey(f"{SCHEMA}.forum_threads.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id = Column(
+        Integer,
+        ForeignKey(f"{SCHEMA}.users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
