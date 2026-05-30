@@ -252,9 +252,10 @@ def test_create_post_rejects_locked_thread_for_non_admin_user():
 def test_create_post_returns_author_avatar_metadata():
     session = FakeForumSession(
         results=[
-            FakeExecuteResult(rows=[]),
-            FakeExecuteResult(scalar_one=0),
-            FakeExecuteResult(scalar_one=0),
+            FakeExecuteResult(rows=[]),        # notify_thread_reply: forum_followers query
+            FakeExecuteResult(rows=[]),        # _post_to_plain_dict: series refs
+            FakeExecuteResult(scalar_one=0),   # _post_vote_bits: upvote count
+            FakeExecuteResult(scalar_one=0),   # _post_vote_bits: downvote count
         ],
         get_results={
             (ForumThread, 1): thread_object(),
