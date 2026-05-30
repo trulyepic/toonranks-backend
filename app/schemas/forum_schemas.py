@@ -75,6 +75,8 @@ class ForumThreadOut(BaseModel):
     viewer_is_following: bool = False  # True when the authenticated viewer follows this thread
     category_id: Optional[int] = None
     category_name: Optional[str] = None
+    has_unread: bool = False        # True when viewer has unread posts since last mark-read
+    unread_count: int = 0           # Number of posts since last mark-read (0 if no read state)
 
 
 class CreateThreadIn(BaseModel):
@@ -167,6 +169,16 @@ class ThreadPostsPageOut(BaseModel):
     total_pages: int
     has_prev: bool
     has_next: bool
+
+
+class MarkReadIn(BaseModel):
+    last_seen_post_id: int
+
+
+class MarkReadOut(BaseModel):
+    thread_id: int
+    last_seen_post_id: int
+    last_seen_at: str
 
 
 class FollowToggleOut(BaseModel):
