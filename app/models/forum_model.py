@@ -40,8 +40,9 @@ class ForumThread(Base):
     post_count = Column(Integer, nullable=False, server_default="0")
     last_post_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     locked = Column(Boolean, nullable=False, server_default=text("false"))
-
     latest_first = Column(Boolean, nullable=False, server_default="false")
+    view_count = Column(Integer, nullable=False, server_default="0", default=0)
+    is_pinned = Column(Boolean, nullable=False, server_default=text("false"), default=False)
 
     # relationships
     posts = relationship(

@@ -29,10 +29,14 @@ UPVOTE = "UPVOTE"
 DOWNVOTE = "DOWNVOTE"
 LEGACY_HEART = "HEART"
 POSITIVE_REACTION_KINDS = (UPVOTE, LEGACY_HEART)
+MAX_THREADS_PER_USER = 50  # Raised from 10; limits thread spam without blocking active contributors
 
 
 class LockToggleIn(BaseModel):
     locked: bool
+
+class PinToggleIn(BaseModel):
+    pinned: bool
 
 class ForumVoteIn(BaseModel):
     vote: Optional[Literal["UPVOTE", "DOWNVOTE"]] = None
@@ -211,6 +215,8 @@ async def _thread_to_out(t: ForumThread, db: AsyncSession) -> ForumThreadOut:
         series_refs=srefs,
         locked=bool(getattr(t, "locked", False)),
         latest_first=bool(getattr(t, "latest_first", False)),
+        is_pinned=bool(getattr(t, "is_pinned", False)),
+        view_count=int(getattr(t, "view_count", 0) or 0),
     )
 
 async def _post_to_out(p: ForumPost, db: AsyncSession, viewer: Optional["User"]=None) -> ForumPostOut:
@@ -266,10 +272,10 @@ async def list_threads(
     db: AsyncSession = Depends(get_async_session),
     _viewer: Optional[User] = Depends(get_current_user_optional),
 ):
-    stmt = select(ForumThread).order_by(ForumThread.updated_at.desc())
+    stmt = select(ForumThread).order_by(ForumThread.is_pinned.desc(), ForumThread.updated_at.desc())
     if q:
         stmt = select(ForumThread).where(ForumThread.title.ilike(f"%{q}%")).order_by(
-            ForumThread.updated_at.desc()
+            ForumThread.is_pinned.desc(), ForumThread.updated_at.desc()
         )
 
     stmt = stmt.offset((page - 1) * page_size).limit(page_size)
@@ -300,10 +306,10 @@ request: Request,
             select(func.count(ForumThread.id)).where(ForumThread.author_id == user.id)
         )
     ).scalar_one()
-    if existing_count >= 10:
+    if existing_count >= MAX_THREADS_PER_USER:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Thread limit reached (10). Delete an existing thread to create a new one.",
+            detail=f"Thread limit reached ({MAX_THREADS_PER_USER}). Delete an existing thread to create a new one.",
         )
 
     thread = ForumThread(title=payload.title, author_id=user.id)
@@ -406,8 +412,9 @@ async def list_threads_paged(
         total_stmt = total_stmt.where(*filters)
     total = int((await db.execute(total_stmt)).scalar_one() or 0)
 
-    # page rows (stable order)
+    # page rows — pinned threads always first, then by most recent activity
     stmt = select(ForumThread).order_by(
+        ForumThread.is_pinned.desc(),
         ForumThread.last_post_at.desc(),
         ForumThread.id.desc(),
     )
@@ -438,6 +445,12 @@ async def get_thread(
     t = await db.get(ForumThread, thread_id)
     if not t:
         raise HTTPException(status_code=404, detail="Thread not found")
+
+    # Increment view count; skip if the viewer is the thread author to avoid self-inflation
+    if not (viewer and viewer.id == t.author_id):
+        t.view_count = (t.view_count or 0) + 1
+        await db.commit()
+        await db.refresh(t)
 
     # Posts (unchanged)
     posts = (
@@ -471,6 +484,12 @@ async def get_thread_posts_paged(
     t = await db.get(ForumThread, thread_id)
     if not t:
         raise HTTPException(status_code=404, detail="Thread not found")
+
+    # Increment view count on page 1 only (so paginating deeper doesn't keep inflating the count)
+    if page == 1 and not (viewer and viewer.id == t.author_id):
+        t.view_count = (t.view_count or 0) + 1
+        await db.commit()
+        await db.refresh(t)
 
     # Oldest post is the OP
     first_post = (
@@ -610,6 +629,25 @@ async def set_thread_lock(
     await db.commit()
     await db.refresh(t)
     return {"id": t.id, "locked": t.locked}
+
+
+@router.patch("/threads/{thread_id}/pin")
+async def set_thread_pin(
+    thread_id: int,
+    body: PinToggleIn,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """Admin-only: pin or unpin a thread so it always appears at the top of the thread list."""
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="Admin only")
+    t = await db.get(ForumThread, thread_id)
+    if not t:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    t.is_pinned = bool(body.pinned)
+    await db.commit()
+    await db.refresh(t)
+    return {"id": t.id, "is_pinned": t.is_pinned}
 
 
 @router.post("/threads/{thread_id}/posts")

@@ -45,6 +45,8 @@ class ForumThreadOut(BaseModel):
     series_refs: List[SeriesRefOut] = []
     locked: bool = False
     latest_first: bool = False
+    is_pinned: bool = False
+    view_count: int = 0
 
 
 class CreateThreadIn(BaseModel):
