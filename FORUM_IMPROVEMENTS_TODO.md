@@ -31,6 +31,7 @@ complexity. The frontend companion doc is at `toonranks-frontend/FORUM_IMPROVEME
 | `ForumReport` | `id`, `post_id`, `thread_id`, `reporter_id`, `reason`, `status` (OPEN/REVIEWED/DISMISSED), `reviewed_at`, `reviewed_by_id` |
 | `ForumFollower` | `id`, `thread_id`, `user_id`, `created_at` |
 | `ForumBookmark` | `id`, `post_id`, `thread_id`, `user_id`, `created_at` |
+| `ForumCategory` | `id`, `name`, `slug`, `description`, `position`, `is_visible`, `created_at` |
 
 **Current endpoints:**
 
@@ -64,6 +65,10 @@ complexity. The frontend companion doc is at `toonranks-frontend/FORUM_IMPROVEME
 | `GET` | `/forum/me/following` | Required | Paginated threads user is following; `PageOut` |
 | `POST` | `/forum/threads/{thread_id}/posts/{post_id}/bookmark` | Required | Toggle bookmark; rate: `60/min`; returns `{ bookmarked }` |
 | `GET` | `/forum/me/bookmarks` | Required | Paginated bookmarked posts; `PostsPageOut` |
+| `GET` | `/forum/categories` | None | All visible categories ordered by position, with `thread_count` |
+| `POST` | `/forum/categories` | Admin only | Create category; 409 on duplicate name/slug |
+| `PATCH` | `/forum/categories/{id}` | Admin only | Update name, slug, description, position, visibility |
+| `DELETE` | `/forum/categories/{id}` | Admin only | Delete only if no threads; 409 otherwise |
 
 **Cred score formula:**
 - `+2` when user creates a thread
@@ -261,9 +266,11 @@ Add to `app/routes/forum_routes.py`:
 
 ---
 
-## Phase 5: Categories / Subforums
+## ✅ Phase 5: Categories / Subforums
 
-Suggested branch: `backend-forum-categories`
+Suggested branch: `backend-forum-categories` — **complete, pending merge**
+
+Migration applied: `FORUM_CATEGORIES_MIGRATION.sql`
 
 This is the largest structural change. Currently all threads exist in one flat undifferentiated
 list. Categories let users and admins organize threads into boards (e.g. "General Discussion",
@@ -291,78 +298,31 @@ class ForumCategory(Base):
 
 ### 5b — `ForumThread` changes
 
-- [ ] Add FK to `ForumThread` in `app/models/forum_model.py`:
-  ```python
-  category_id = Column(
-      Integer,
-      ForeignKey(f"{SCHEMA}.forum_categories.id", ondelete="SET NULL"),
-      nullable=True,
-      index=True,
-  )
-  category = relationship("ForumCategory", back_populates="threads")
-  ```
+- [x] Add FK to `ForumThread` in `app/models/forum_model.py`:
   `nullable=True` so existing uncategorized threads are unaffected by the migration.
 
 ### 5c — Migration
 
-- [ ] Create Alembic migration:
-  ```sql
-  CREATE TABLE man_review.forum_categories (
-      id SERIAL PRIMARY KEY,
-      name VARCHAR(100) NOT NULL UNIQUE,
-      slug VARCHAR(100) NOT NULL UNIQUE,
-      description VARCHAR(500),
-      position INTEGER NOT NULL DEFAULT 0,
-      is_visible BOOLEAN NOT NULL DEFAULT TRUE,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-  );
-
-  ALTER TABLE man_review.forum_threads
-      ADD COLUMN category_id INTEGER REFERENCES man_review.forum_categories(id) ON DELETE SET NULL;
-  CREATE INDEX ON man_review.forum_threads (category_id);
-
-  -- Seed default categories
-  INSERT INTO man_review.forum_categories (name, slug, description, position) VALUES
-      ('General Discussion', 'general', 'Talk about anything Toon Ranks related', 0),
-      ('Series Talk', 'series', 'Discuss specific series, share recommendations', 1),
-      ('Site Feedback', 'feedback', 'Bug reports, feature requests, and suggestions', 2),
-      ('Introductions', 'introductions', 'Introduce yourself to the community', 3);
-  ```
+- [x] Created `FORUM_CATEGORIES_MIGRATION.sql` — creates `man_review.forum_categories` table, adds `category_id` FK to `forum_threads`, seeds 4 default categories
 
 ### 5d — Category endpoints
 
-Add to `app/routes/forum_routes.py` (or a new `app/routes/forum_category_routes.py`):
-
-- [ ] `GET /forum/categories` — Public. Returns all visible categories ordered by `position`.
-  Include `thread_count` (count of threads in each category) in the response.
-  ```python
-  class ForumCategoryOut(BaseModel):
-      id: int
-      name: str
-      slug: str
-      description: Optional[str]
-      position: int
-      thread_count: int
-  ```
-- [ ] `POST /forum/categories` — Admin only. Create a new category.
-  Body: `{ "name": str, "slug": str, "description": Optional[str], "position": Optional[int] }`
-- [ ] `PATCH /forum/categories/{category_id}` — Admin only. Update name, description, position, visibility.
-- [ ] `DELETE /forum/categories/{category_id}` — Admin only. Only allowed if the category has no threads
-  (or move threads to uncategorized first). Return 409 if threads still reference it.
+- [x] `GET /forum/categories` — Public. Returns all visible categories ordered by `position` with `thread_count`
+- [x] `POST /forum/categories` — Admin only. Validates unique name + slug; returns 409 on duplicate
+- [x] `PATCH /forum/categories/{category_id}` — Admin only. Update name, slug, description, position, visibility
+- [x] `DELETE /forum/categories/{category_id}` — Admin only. Returns 409 if threads still belong to category
 
 ### 5e — Filter threads by category
 
-- [ ] Add `category_id: Optional[int] = None` and `category_slug: Optional[str] = None` query params
-  to `GET /forum/threads-paged`.
-- [ ] When `category_slug` is provided, look up the category by slug and filter threads by `category_id`.
-  `category_slug` is preferred over `category_id` for clean URLs.
-- [ ] Add `category_id` as an optional field on `CreateThreadIn` so clients can assign a category at
-  creation time.
-- [ ] Add `category_id` and `category_name` to `ForumThreadOut` response.
-- [ ] Include `category_id` handling in the `update_thread` endpoint so admins can re-categorize threads.
+- [x] `category_slug` and `category_id` query params added to `GET /forum/threads-paged`; slug takes priority
+- [x] Unknown slug returns empty page (not 404) so frontend doesn't crash on bad slug
+- [x] `category_id` added to `CreateThreadIn`; validated against DB on create
+- [x] `category_id` and `category_name` added to `ForumThreadOut` and populated in `_thread_to_out`
+- [x] `category_id` handling in `update_thread`: pass `0` to unset, any valid id to re-assign
 
 ### 5f — Tests
 
+- [x] All 18 existing tests still pass (no regressions)
 - [ ] GET `/forum/categories` returns all visible categories with thread counts
 - [ ] POST category as non-admin → 403
 - [ ] POST `/forum/threads` with `category_id` → thread is assigned to that category

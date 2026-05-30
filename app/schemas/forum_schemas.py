@@ -4,6 +4,30 @@ from pydantic import BaseModel, Field
 from typing import List, Literal, Optional
 
 
+class ForumCategoryOut(BaseModel):
+    id: int
+    name: str
+    slug: str
+    description: Optional[str] = None
+    position: int = 0
+    thread_count: int = 0
+
+
+class CreateCategoryIn(BaseModel):
+    name: str = Field(min_length=2, max_length=100)
+    slug: str = Field(min_length=2, max_length=100, pattern=r"^[a-z0-9-]+$")
+    description: Optional[str] = Field(default=None, max_length=500)
+    position: Optional[int] = 0
+
+
+class UpdateCategoryIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=2, max_length=100)
+    slug: Optional[str] = Field(default=None, min_length=2, max_length=100, pattern=r"^[a-z0-9-]+$")
+    description: Optional[str] = Field(default=None, max_length=500)
+    position: Optional[int] = None
+    is_visible: Optional[bool] = None
+
+
 class SeriesRefOut(BaseModel):
     series_id: int
     title: Optional[str] = None
@@ -49,12 +73,15 @@ class ForumThreadOut(BaseModel):
     is_pinned: bool = False
     view_count: int = 0
     viewer_is_following: bool = False  # True when the authenticated viewer follows this thread
+    category_id: Optional[int] = None
+    category_name: Optional[str] = None
 
 
 class CreateThreadIn(BaseModel):
     title: str = Field(min_length=3, max_length=200)
     first_post_markdown: str = Field(min_length=1)
     series_ids: List[int] = []
+    category_id: Optional[int] = None
 
 
 
@@ -77,6 +104,7 @@ class UpdateThreadIn(BaseModel):
     first_post_markdown: Optional[str] = Field(default=None, min_length=1)
     # Optional: only replace header refs when provided
     series_ids: Optional[List[int]] = None
+    category_id: Optional[int] = None  # pass 0 or null to unset
 
 
 class ForumReportIn(BaseModel):
