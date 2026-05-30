@@ -206,7 +206,8 @@ def test_create_thread_creates_thread_first_post_and_series_refs():
 
 
 def test_create_thread_rejects_user_thread_limit():
-    session = FakeForumSession(results=[FakeExecuteResult(scalar_one=10)])
+    # Simulate a user who has already reached MAX_THREADS_PER_USER (50)
+    session = FakeForumSession(results=[FakeExecuteResult(scalar_one=50)])
     cleanup = override_forum_dependencies(session)
 
     try:
@@ -222,7 +223,7 @@ def test_create_thread_rejects_user_thread_limit():
 
     assert response.status_code == 403
     assert response.json()["detail"] == (
-        "Thread limit reached (10). Delete an existing thread to create a new one."
+        "Thread limit reached (50). Delete an existing thread to create a new one."
     )
     assert session.added == []
     assert session.committed is False
