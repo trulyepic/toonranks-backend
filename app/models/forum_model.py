@@ -285,3 +285,32 @@ class ForumBookmark(Base):
         index=True,
     )
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class ForumReadState(Base):
+    """Tracks the last post a user has seen in each thread for unread-badge support."""
+    __tablename__ = "forum_read_states"
+    __table_args__ = (
+        UniqueConstraint("thread_id", "user_id", name="uq_forum_read_state"),
+        {"schema": SCHEMA},
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    thread_id = Column(
+        Integer,
+        ForeignKey(f"{SCHEMA}.forum_threads.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id = Column(
+        Integer,
+        ForeignKey(f"{SCHEMA}.users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    last_seen_post_id = Column(
+        Integer,
+        ForeignKey(f"{SCHEMA}.forum_posts.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    last_seen_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)

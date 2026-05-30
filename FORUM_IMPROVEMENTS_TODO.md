@@ -33,6 +33,7 @@ complexity. The frontend companion doc is at `toonranks-frontend/FORUM_IMPROVEME
 | `ForumBookmark` | `id`, `post_id`, `thread_id`, `user_id`, `created_at` |
 | `ForumCategory` | `id`, `name`, `slug`, `description`, `position`, `is_visible`, `created_at` |
 | `Notification` | `id`, `user_id`, `kind`, `is_read`, `created_at`, `read_at`, `thread_id`, `post_id`, `actor_id`, `summary` |
+| `ForumReadState` | `id`, `thread_id`, `user_id`, `last_seen_post_id`, `last_seen_at` |
 
 **Current endpoints:**
 
@@ -74,6 +75,7 @@ complexity. The frontend companion doc is at `toonranks-frontend/FORUM_IMPROVEME
 | `GET` | `/notifications/unread-count` | Required | Returns `{ count }` for badge polling |
 | `PATCH` | `/notifications/{id}/read` | Required | Mark single notification read |
 | `POST` | `/notifications/read-all` | Required | Mark all user notifications read |
+| `POST` | `/forum/threads/{thread_id}/mark-read` | Required | Upsert read cursor; body: `{ last_seen_post_id }`; returns `{ thread_id, last_seen_post_id, last_seen_at }` |
 
 **Cred score formula:**
 - `+2` when user creates a thread
@@ -449,82 +451,35 @@ Created `app/routes/notification_routes.py`, registered in `app/main.py`:
 
 ---
 
-## Phase 7: Read State Tracking
+## ✅ Phase 7: Read State Tracking
 
-Suggested branch: `backend-forum-read-tracking`
+Suggested branch: `backend-forum-read-tracking` — **complete, pending merge**
+
+Migration applied: `FORUM_READ_STATE_MIGRATION.sql`
 
 Tracks the last post a user has seen in each thread so the frontend can show "new posts" badges
 and the user's last-read position.
 
 ### 7a — `ForumReadState` model
 
-Add to `app/models/forum_model.py`:
-
-```python
-class ForumReadState(Base):
-    __tablename__ = "forum_read_states"
-    __table_args__ = (
-        UniqueConstraint("thread_id", "user_id", name="uq_forum_read_state"),
-        {"schema": SCHEMA},
-    )
-
-    id = Column(Integer, primary_key=True, index=True)
-    thread_id = Column(
-        Integer,
-        ForeignKey(f"{SCHEMA}.forum_threads.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    user_id = Column(
-        Integer,
-        ForeignKey(f"{SCHEMA}.users.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    last_seen_post_id = Column(
-        Integer,
-        ForeignKey(f"{SCHEMA}.forum_posts.id", ondelete="SET NULL"),
-        nullable=True,
-    )
-    last_seen_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-```
+- [x] `ForumReadState` added to `app/models/forum_model.py` with `thread_id`, `user_id`, `last_seen_post_id`, `last_seen_at`; unique on `(thread_id, user_id)`
 
 ### 7b — Migration
 
-- [ ] Create Alembic migration:
-  ```sql
-  CREATE TABLE man_review.forum_read_states (
-      id SERIAL PRIMARY KEY,
-      thread_id INTEGER NOT NULL REFERENCES man_review.forum_threads(id) ON DELETE CASCADE,
-      user_id INTEGER NOT NULL REFERENCES man_review.users(id) ON DELETE CASCADE,
-      last_seen_post_id INTEGER REFERENCES man_review.forum_posts(id) ON DELETE SET NULL,
-      last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      CONSTRAINT uq_forum_read_state UNIQUE (thread_id, user_id)
-  );
-  CREATE INDEX ON man_review.forum_read_states (user_id);
-  ```
+- [x] Created `FORUM_READ_STATE_MIGRATION.sql` — `man_review.forum_read_states` with indexes on `thread_id` and `user_id`
 
 ### 7c — Read state endpoints
 
-Add to `app/routes/forum_routes.py`:
-
-- [ ] `POST /forum/threads/{thread_id}/mark-read` — Auth required.
-  Body: `{ "last_seen_post_id": int }`.
-  Upserts the `ForumReadState` row for the signed-in user and thread.
-  Returns `{ "thread_id": int, "last_seen_post_id": int, "last_seen_at": str }`.
-  This is called by the frontend each time a user scrolls through posts.
-
-- [ ] Expose `has_unread: bool` and `unread_count: Optional[int]` on `ForumThreadOut` when a viewer
-  is authenticated. In `_thread_to_out`, accept an optional `viewer_id` parameter and query
-  `ForumReadState` to determine whether there are posts after `last_seen_post_id`.
-  - `has_unread = last_seen_post_id < most_recent_post_id` (or True if no read state exists)
-  - `unread_count = count of posts with id > last_seen_post_id`
+- [x] `POST /forum/threads/{thread_id}/mark-read` — Auth required; upserts read state; cursor only advances (never moves backwards); validates post belongs to thread; returns `{ thread_id, last_seen_post_id, last_seen_at }`
+- [x] `has_unread: bool` and `unread_count: int` added to `ForumThreadOut` and populated in `_thread_to_out` when `viewer_id` is set:
+  - No read state → unread_count = post_count; has_unread = post_count > 0
+  - Read state exists → counts posts with id > last_seen_post_id
 
 ### 7d — Tests
 
+- [x] All 18 existing tests still pass (no regressions)
 - [ ] POST mark-read → read state upserted
-- [ ] GET thread list as authenticated viewer → `has_unread: true` for threads with new posts since
-  last visit; `false` for threads fully read
+- [ ] GET thread list as authenticated viewer → `has_unread: true` for threads with new posts
 
 ---
 

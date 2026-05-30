@@ -7,7 +7,7 @@ from sqlalchemy import select, func, delete, or_
 from typing import Literal, Optional, List
 
 from app.database import get_async_session
-from app.models.forum_model import ForumThread, ForumPost, ForumSeriesRef, ForumReaction, ForumReport, ForumFollower, ForumBookmark, ForumCategory
+from app.models.forum_model import ForumThread, ForumPost, ForumSeriesRef, ForumReaction, ForumReport, ForumFollower, ForumBookmark, ForumCategory, ForumReadState
 from app.models.series_model import Series
 from app.models.user_model import User
 
@@ -17,6 +17,7 @@ from app.schemas.forum_schemas import (
     ForumReportIn, ForumReportReviewIn, ForumReportOut, ForumReportsPageOut,
     FollowToggleOut, BookmarkToggleOut,
     ForumCategoryOut, CreateCategoryIn, UpdateCategoryIn,
+    MarkReadIn, MarkReadOut,
 )
 from app.utils.forum_content import reject_disallowed_images
 
@@ -223,6 +224,29 @@ async def _thread_to_out(t: ForumThread, db: AsyncSession, viewer_id: Optional[i
         cat = await db.get(ForumCategory, category_id)
         category_name = cat.name if cat else None
 
+    has_unread = False
+    unread_count = 0
+    if viewer_id:
+        read_state = (await db.execute(
+            select(ForumReadState).where(
+                ForumReadState.thread_id == t.id,
+                ForumReadState.user_id == viewer_id,
+            ).limit(1)
+        )).scalars().first()
+
+        if read_state is None:
+            # Never visited — unread if the thread has any posts
+            unread_count = t.post_count or 0
+            has_unread = unread_count > 0
+        elif read_state.last_seen_post_id is not None:
+            unread_count = int((await db.execute(
+                select(func.count(ForumPost.id)).where(
+                    ForumPost.thread_id == t.id,
+                    ForumPost.id > read_state.last_seen_post_id,
+                )
+            )).scalar_one() or 0)
+            has_unread = unread_count > 0
+
     return ForumThreadOut(
         id=t.id,
         title=t.title,
@@ -239,6 +263,8 @@ async def _thread_to_out(t: ForumThread, db: AsyncSession, viewer_id: Optional[i
         viewer_is_following=viewer_is_following,
         category_id=category_id,
         category_name=category_name,
+        has_unread=has_unread,
+        unread_count=unread_count,
     )
 
 async def _post_to_out(p: ForumPost, db: AsyncSession, viewer: Optional["User"]=None) -> ForumPostOut:
@@ -1782,3 +1808,60 @@ async def delete_category(
 
     await db.delete(cat)
     await db.commit()
+
+
+# ==============================
+# Read state tracking
+# ==============================
+
+@router.post("/threads/{thread_id}/mark-read", response_model=MarkReadOut)
+async def mark_thread_read(
+    thread_id: int,
+    payload: MarkReadIn,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """
+    Upsert the viewer's read state for a thread.
+    Call this each time the user scrolls through posts; pass the ID of the last post they saw.
+    """
+    thread = await db.get(ForumThread, thread_id)
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    # Validate that the post exists and belongs to this thread
+    post = await db.get(ForumPost, payload.last_seen_post_id)
+    if not post or post.thread_id != thread_id:
+        raise HTTPException(status_code=404, detail="Post not found in this thread")
+
+    existing = (await db.execute(
+        select(ForumReadState).where(
+            ForumReadState.thread_id == thread_id,
+            ForumReadState.user_id == user.id,
+        ).limit(1)
+    )).scalars().first()
+
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+
+    if existing:
+        # Only advance — never move the read cursor backwards
+        if (existing.last_seen_post_id is None or
+                payload.last_seen_post_id > existing.last_seen_post_id):
+            existing.last_seen_post_id = payload.last_seen_post_id
+            existing.last_seen_at = now
+    else:
+        db.add(ForumReadState(
+            thread_id=thread_id,
+            user_id=user.id,
+            last_seen_post_id=payload.last_seen_post_id,
+            last_seen_at=now,
+        ))
+
+    await db.commit()
+
+    return MarkReadOut(
+        thread_id=thread_id,
+        last_seen_post_id=payload.last_seen_post_id,
+        last_seen_at=str(now),
+    )
