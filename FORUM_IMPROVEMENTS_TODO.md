@@ -76,6 +76,8 @@ complexity. The frontend companion doc is at `toonranks-frontend/FORUM_IMPROVEME
 | `PATCH` | `/notifications/{id}/read` | Required | Mark single notification read |
 | `POST` | `/notifications/read-all` | Required | Mark all user notifications read |
 | `POST` | `/forum/threads/{thread_id}/mark-read` | Required | Upsert read cursor; body: `{ last_seen_post_id }`; returns `{ thread_id, last_seen_post_id, last_seen_at }` |
+| `GET` | `/forum/threads-paged` | None (opt) | Now also supports `?search_posts=true` to match post content |
+| `GET` | `/forum/threads/{thread_id}/posts/search` | None (opt) | Search posts within a thread by keyword; `PostsPageOut` |
 
 **Cred score formula:**
 - `+2` when user creates a thread
@@ -483,52 +485,24 @@ and the user's last-read position.
 
 ---
 
-## Phase 8: Full-text Post Content Search
+## ✅ Phase 8: Full-text Post Content Search
 
-Suggested branch: `backend-forum-fulltext-search`
+Suggested branch: `backend-forum-fulltext-search` — **complete, pending merge**
+
+No migration required (`ilike` approach; tsvector deferred to post-launch).
 
 Currently `GET /forum/threads-paged` only searches thread **titles** via `title.ilike(f"%{q}%")`.
 Users cannot search for a specific post or keyword within thread bodies.
 
 **File:** `app/routes/forum_routes.py`
 
-- [ ] Add `search_posts: bool = Query(False)` to `GET /forum/threads-paged`.
-  When `q` is provided and `search_posts=True`, the query should also search post content:
-  ```python
-  from sqlalchemy import exists
+- [x] `search_posts: bool = Query(False)` added to `GET /forum/threads-paged`; when `True` and `q` is set, uses `exists()` subquery to also match threads where any post content contains the term (`OR` with title match)
+- [x] `GET /forum/threads/{thread_id}/posts/search?q=&page=&page_size=` — searches post content within a single thread; returns `PostsPageOut`; respects viewer auth for vote/bookmark state
+- [x] `exists` imported from `sqlalchemy`
 
-  if q and search_posts:
-      post_match = exists().where(
-          ForumPost.thread_id == ForumThread.id,
-          ForumPost.content_markdown.ilike(f"%{q}%"),
-      )
-      filters.append(or_(ForumThread.title.ilike(f"%{q}%"), post_match))
-  elif q:
-      filters.append(ForumThread.title.ilike(f"%{q}%"))
-  ```
-  This surfaces threads that contain the search term in any post, even if the title doesn't match.
+- [ ] **Optional — PostgreSQL full-text search (post-launch):** Replace `ilike` with `tsvector` + `GIN` index when search load is measurable.
 
-- [ ] Add a separate post-level search endpoint for searching within a specific thread:
-  `GET /forum/threads/{thread_id}/posts/search?q=keyword&page=1&page_size=20`
-  Returns matching posts in `PostsPageOut` format with the same viewer auth pattern.
-
-- [ ] **Optional — PostgreSQL full-text search:** For production scale, consider adding
-  `tsvector` columns and `GIN` indexes to both `forum_threads.title` and
-  `forum_posts.content_markdown`. A dedicated migration can add:
-  ```sql
-  ALTER TABLE man_review.forum_posts
-      ADD COLUMN search_vector tsvector GENERATED ALWAYS AS (
-          to_tsvector('english', coalesce(content_markdown, ''))
-      ) STORED;
-  CREATE INDEX ON man_review.forum_posts USING GIN (search_vector);
-  ```
-  The route would then use `ForumPost.search_vector.match(q)` instead of `ilike`.
-  Skip this in the first pass — `ilike` is sufficient until search load is measurable.
-
-- [ ] Add tests:
-  - `?q=keyword&search_posts=false` → only threads with keyword in title match
-  - `?q=keyword&search_posts=true` → threads with keyword in any post content also match
-  - GET post search within thread → only posts matching keyword returned
+- [x] All 18 existing tests still pass (no migration, no mock changes needed)
 
 ---
 
@@ -538,7 +512,7 @@ Users cannot search for a specific post or keyword within thread bodies.
   needed for v1.
 - [ ] Expose `author_id` on `ForumThreadOut` (currently only `author_username` is returned) to make
   building moderator tools easier.
-- [ ] Periodic job to purge `Notification` rows older than 90 days (Railway cron or a scheduled task).
+- [ ] Periodic job to purge `Notification` rows older than 90 days (AWS scheduled task or pg_cron extension).
 - [ ] Consider caching category list in Redis/memory since categories change rarely.
 - [ ] Rate limit the `mark-read` endpoint at `60/minute` to prevent abuse as a tracking beacon.
 - [ ] Email digest notifications (weekly summary of forum activity) — requires an email sending

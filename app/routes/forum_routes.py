@@ -3,7 +3,7 @@ import math
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, delete, or_
+from sqlalchemy import select, func, delete, or_, exists
 from typing import Literal, Optional, List
 
 from app.database import get_async_session
@@ -466,12 +466,21 @@ async def list_threads_paged(
     sort: Optional[Literal["activity", "newest", "replies"]] = Query("activity"),
     category_id: Optional[int] = None,
     category_slug: Optional[str] = None,
+    search_posts: bool = Query(False),  # when True, also match threads where any post contains q
     db: AsyncSession = Depends(get_async_session),
     _viewer: Optional[User] = Depends(get_current_user_optional),
 ):
     filters = []
     if q:
-        filters.append(ForumThread.title.ilike(f"%{q}%"))
+        if search_posts:
+            # Match title OR any post content
+            post_match = exists().where(
+                ForumPost.thread_id == ForumThread.id,
+                ForumPost.content_markdown.ilike(f"%{q}%"),
+            )
+            filters.append(or_(ForumThread.title.ilike(f"%{q}%"), post_match))
+        else:
+            filters.append(ForumThread.title.ilike(f"%{q}%"))
     if author_id is not None:
         filters.append(ForumThread.author_id == author_id)
 
@@ -1864,4 +1873,59 @@ async def mark_thread_read(
         thread_id=thread_id,
         last_seen_post_id=payload.last_seen_post_id,
         last_seen_at=str(now),
+    )
+
+
+# ==============================
+# Post content search within a thread
+# ==============================
+
+@router.get("/threads/{thread_id}/posts/search", response_model=PostsPageOut)
+async def search_posts_in_thread(
+    thread_id: int,
+    q: str = Query(..., min_length=1),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_async_session),
+    viewer: Optional[User] = Depends(get_current_user_optional),
+):
+    """
+    Search posts within a specific thread by content keyword.
+    Returns matching posts in PostsPageOut format, newest first.
+    """
+    thread = await db.get(ForumThread, thread_id)
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    pattern = f"%{q}%"
+
+    total = int((await db.execute(
+        select(func.count(ForumPost.id)).where(
+            ForumPost.thread_id == thread_id,
+            ForumPost.content_markdown.ilike(pattern),
+        )
+    )).scalar_one() or 0)
+
+    rows = (await db.execute(
+        select(ForumPost)
+        .where(
+            ForumPost.thread_id == thread_id,
+            ForumPost.content_markdown.ilike(pattern),
+        )
+        .order_by(ForumPost.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )).scalars().all()
+
+    items = [await _post_to_out(p, db, viewer) for p in rows]
+    total_pages = max(1, math.ceil(total / page_size))
+
+    return PostsPageOut(
+        items=items,
+        page=page,
+        page_size=page_size,
+        total=total,
+        total_pages=total_pages,
+        has_prev=page > 1,
+        has_next=page < total_pages,
     )
