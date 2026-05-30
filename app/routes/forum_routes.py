@@ -397,6 +397,7 @@ async def list_threads_paged(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     author_id: Optional[int] = None,  # allows "my threads" count without fetching 1000 rows
+    sort: Optional[Literal["activity", "newest", "replies"]] = Query("activity"),
     db: AsyncSession = Depends(get_async_session),
     _viewer: Optional[User] = Depends(get_current_user_optional),
 ):
@@ -412,12 +413,15 @@ async def list_threads_paged(
         total_stmt = total_stmt.where(*filters)
     total = int((await db.execute(total_stmt)).scalar_one() or 0)
 
-    # page rows — pinned threads always first, then by most recent activity
-    stmt = select(ForumThread).order_by(
-        ForumThread.is_pinned.desc(),
-        ForumThread.last_post_at.desc(),
-        ForumThread.id.desc(),
-    )
+    # Pinned threads always surface first regardless of sort selection
+    if sort == "newest":
+        order_clause = [ForumThread.is_pinned.desc(), ForumThread.created_at.desc(), ForumThread.id.desc()]
+    elif sort == "replies":
+        order_clause = [ForumThread.is_pinned.desc(), ForumThread.post_count.desc(), ForumThread.id.desc()]
+    else:  # "activity" (default)
+        order_clause = [ForumThread.is_pinned.desc(), ForumThread.last_post_at.desc(), ForumThread.id.desc()]
+
+    stmt = select(ForumThread).order_by(*order_clause)
     if filters:
         stmt = stmt.where(*filters)
     stmt = stmt.offset((page - 1) * page_size).limit(page_size)
@@ -434,6 +438,7 @@ async def list_threads_paged(
         total_pages=total_pages,
         has_prev=page > 1,
         has_next=page < total_pages,
+        sort=sort,
     )
 
 @router.get("/threads/{thread_id}")

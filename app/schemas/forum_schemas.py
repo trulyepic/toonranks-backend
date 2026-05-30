@@ -85,6 +85,7 @@ class PageOut(BaseModel):
     total_pages: int
     has_prev: bool
     has_next: bool
+    sort: Optional[str] = "activity"
 
 
 class PostsPageOut(BaseModel):
