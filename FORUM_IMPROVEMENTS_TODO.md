@@ -23,7 +23,7 @@ complexity. The frontend companion doc is at `toonranks-frontend/FORUM_IMPROVEME
 
 | Model | Key columns |
 |---|---|
-| `ForumThread` | `id`, `title`, `author_id`, `created_at`, `updated_at`, `post_count`, `last_post_at`, `locked`, `latest_first` |
+| `ForumThread` | `id`, `title`, `author_id`, `created_at`, `updated_at`, `post_count`, `last_post_at`, `locked`, `latest_first`, `view_count`, `is_pinned` |
 | `ForumPost` | `id`, `thread_id`, `author_id`, `parent_id`, `content_markdown`, `created_at`, `updated_at`, `heart_count`, `upvote_count`, `downvote_count` |
 | `ForumSeriesRef` | `id`, `thread_id`, `post_id`, `series_id` |
 | `ForumReaction` | `id`, `post_id`, `user_id`, `kind` (UPVOTE/DOWNVOTE/HEART) |
@@ -34,8 +34,8 @@ complexity. The frontend companion doc is at `toonranks-frontend/FORUM_IMPROVEME
 | Method | Path | Auth | Notes |
 |---|---|---|---|
 | `GET` | `/forum/threads` | None | Simple list, title search, sorted `updated_at DESC` |
-| `GET` | `/forum/threads-paged` | None | Paginated with `?q=` title search; sorts by `last_post_at DESC` only |
-| `POST` | `/forum/threads` | Required | Rate: `3/min; 20/hr; 60/day`. Limit: 10 threads per user |
+| `GET` | `/forum/threads-paged` | None | Paginated; `?q=` title search; `?sort=activity/newest/replies`; pinned first |
+| `POST` | `/forum/threads` | Required | Rate: `3/min; 20/hr; 60/day`. Limit: 50 threads per user |
 | `GET` | `/forum/threads/{thread_id}` | None (opt) | Full thread + all posts flat |
 | `GET` | `/forum/threads/{thread_id}/posts-paged` | None (opt) | Paginated nested posts |
 | `PATCH` | `/forum/threads/{thread_id}` | Owner/Admin | Rate: `6/min; 40/hr; 150/day` |
@@ -53,6 +53,10 @@ complexity. The frontend companion doc is at `toonranks-frontend/FORUM_IMPROVEME
 | `GET` | `/forum/me/votes` | Required | Signed-in user's voted posts, paginated |
 | `GET` | `/forum/series-search` | None | Rate: `30/min; 1000/day` |
 | `POST` | `/forum/media/upload` | Required | Multipart; max 300 KB image / 1 MB GIF |
+| `PATCH` | `/forum/threads/{thread_id}/pin` | Admin only | Toggles `is_pinned` boolean |
+| `POST` | `/forum/threads/{thread_id}/posts/{post_id}/report` | Required | Rate: `5/hr`; blocks self-report and duplicates |
+| `GET` | `/forum/reports` | Admin only | Paginated moderation queue; filterable by status |
+| `PATCH` | `/forum/reports/{report_id}` | Admin only | Mark report REVIEWED or DISMISSED |
 
 **Cred score formula:**
 - `+2` when user creates a thread
@@ -63,286 +67,68 @@ complexity. The frontend companion doc is at `toonranks-frontend/FORUM_IMPROVEME
 
 ---
 
-## Phase 1: Quick Wins — Thread Limit, View Count, and Pinning Column
+## ✅ Phase 1: Quick Wins — Thread Limit, View Count, and Pinning Column
 
-Suggested branch: `backend-forum-quick-wins`
+Suggested branch: `backend-forum-quick-wins` — **merged and deployed**
 
-These three changes require a migration and minor route edits but no new models.
+Migration applied: `FORUM_THREAD_COLUMNS_MIGRATION.sql`
 
 ### 1a — Raise the thread limit
 
-**File:** `app/routes/forum_routes.py`, line ~303
-
-The limit `if existing_count >= 10` is hard-coded. Popular forums have no per-user thread cap or
-use a much higher one (50–100). Ten is far too restrictive for active contributors.
-
-- [ ] Extract the constant to the top of `forum_routes.py`:
-  ```python
-  MAX_THREADS_PER_USER = 50  # Raised from 10; limits thread spam without blocking real contributors
-  ```
-- [ ] Replace the inline `>= 10` comparison: `if existing_count >= MAX_THREADS_PER_USER`
-- [ ] Update the 403 error detail to reflect the new limit:
-  `f"Thread limit reached ({MAX_THREADS_PER_USER}). Delete an existing thread to create a new one."`
-- [ ] Add a backend test: POST to `/forum/threads` as a user with exactly `MAX_THREADS_PER_USER`
-  threads — confirm 403 is returned. With `MAX_THREADS_PER_USER - 1` threads — confirm 201.
+- [x] `MAX_THREADS_PER_USER = 50` constant added to top of `forum_routes.py`
+- [x] Inline `>= 10` replaced with `>= MAX_THREADS_PER_USER`
+- [x] 403 error message updated to reflect new limit
+- [x] Existing thread-limit test updated to assert against 50
 
 ### 1b — Thread view count
 
-**Files:**
-- `app/models/forum_model.py` — add column
-- Alembic migration — add `view_count` column
-- `app/routes/forum_routes.py` — increment on fetch
-
-The `ForumThread` model has no `view_count`. Adding it lets both the thread list and detail views
-show how many times a thread has been viewed.
-
-- [ ] Add `view_count = Column(Integer, nullable=False, server_default="0", default=0)` to
-  `ForumThread` in `app/models/forum_model.py`
-- [ ] Create an Alembic migration:
-  ```sql
-  ALTER TABLE man_review.forum_threads ADD COLUMN view_count INTEGER NOT NULL DEFAULT 0;
-  ```
-- [ ] In `get_thread` (`GET /forum/threads/{thread_id}`), increment view count on every fetch:
-  ```python
-  t.view_count = (t.view_count or 0) + 1
-  await db.commit()
-  ```
-  Do not increment for the thread author's own views — check `if viewer and viewer.id != t.author_id`.
-  Alternatively, increment for all viewers including the author for simplicity in v1.
-- [ ] Expose `view_count` in the `ForumThreadOut` Pydantic schema in `app/schemas/forum_schemas.py`
-- [ ] Include `view_count` in `_thread_to_out()` in `forum_routes.py`
-- [ ] Include `view_count` in `ThreadPostsPageOut` response (already uses `_thread_to_out`)
+- [x] `view_count` column added to `ForumThread` model
+- [x] Migration SQL created (`FORUM_THREAD_COLUMNS_MIGRATION.sql`)
+- [x] `get_thread` increments `view_count` on fetch, skips author's own views
+- [x] `get_thread_posts_paged` increments on page 1 only
+- [x] `view_count` exposed in `ForumThreadOut` schema and `_thread_to_out()` mapper
 
 ### 1c — Pinned thread column
 
-**Files:**
-- `app/models/forum_model.py` — add column
-- Alembic migration — add `is_pinned` column
-- `app/routes/forum_routes.py` — sort pinned first, admin pin/unpin endpoint
-- `app/schemas/forum_schemas.py` — expose in response
-
-Currently there is a client-side hack in the frontend that pins any thread whose title contains
-"Patch Notes". This is fragile. The correct solution is an `is_pinned` flag controlled by admins.
-
-- [ ] Add `is_pinned = Column(Boolean, nullable=False, server_default=text("false"), default=False)`
-  to `ForumThread` in `app/models/forum_model.py`
-- [ ] Create an Alembic migration:
-  ```sql
-  ALTER TABLE man_review.forum_threads ADD COLUMN is_pinned BOOLEAN NOT NULL DEFAULT FALSE;
-  ```
-- [ ] Expose `is_pinned` in `ForumThreadOut` Pydantic schema
-- [ ] Include `is_pinned` in `_thread_to_out()` mapper
-- [ ] Update thread list ordering in `list_threads_paged` to sort pinned threads first:
-  ```python
-  .order_by(
-      ForumThread.is_pinned.desc(),
-      ForumThread.last_post_at.desc(),
-      ForumThread.id.desc(),
-  )
-  ```
-  Apply the same ordering change to the legacy `list_threads` route.
-- [ ] Add a new admin-only endpoint:
-  ```
-  PATCH /forum/threads/{thread_id}/pin
-  Body: { "pinned": bool }
-  Auth: Admin only (403 for non-admins)
-  ```
-  Implementation pattern: identical to the existing `set_thread_lock` endpoint.
-  ```python
-  @router.patch("/threads/{thread_id}/pin")
-  async def set_thread_pin(
-      thread_id: int,
-      body: PinToggleIn,
-      user: User = Depends(get_current_user),
-      db: AsyncSession = Depends(get_async_session),
-  ):
-      if not _is_admin(user):
-          raise HTTPException(status_code=403, detail="Admin only")
-      t = await db.get(ForumThread, thread_id)
-      if not t:
-          raise HTTPException(status_code=404, detail="Thread not found")
-      t.is_pinned = bool(body.pinned)
-      await db.commit()
-      await db.refresh(t)
-      return {"id": t.id, "is_pinned": t.is_pinned}
-  ```
-  Add `class PinToggleIn(BaseModel): pinned: bool` alongside `LockToggleIn`.
-- [ ] Add a test: PATCH `/forum/threads/{id}/pin` as admin → `is_pinned` flips. As non-admin → 403.
-- [ ] Add a test: GET `/forum/threads-paged` returns pinned threads first regardless of `last_post_at`.
+- [x] `is_pinned` column added to `ForumThread` model
+- [x] Migration SQL created (`FORUM_THREAD_COLUMNS_MIGRATION.sql`)
+- [x] `is_pinned` exposed in `ForumThreadOut` schema and `_thread_to_out()` mapper
+- [x] `list_threads_paged` and `list_threads` both sort `is_pinned DESC` first
+- [x] `PATCH /forum/threads/{id}/pin` admin-only endpoint added
+- [x] `PinToggleIn` Pydantic model added alongside `LockToggleIn`
 
 ---
 
-## Phase 2: Thread Sorting Options
+## ✅ Phase 2: Thread Sorting Options
 
-Suggested branch: `backend-forum-thread-sorting`
+Suggested branch: `backend-forum-thread-sorting` — **merged and deployed**
 
-The thread list currently sorts only by `last_post_at DESC`. Popular forums let users sort by
-newest threads, most replies, or hot (most recent activity). This phase adds a `sort` query param
-to `GET /forum/threads-paged`.
+No migration required.
 
-**File:** `app/routes/forum_routes.py` — `list_threads_paged` function (line ~388)
-
-- [ ] Add a `sort` query param with an `Optional[Literal]` type:
-  ```python
-  sort: Optional[Literal["activity", "newest", "replies"]] = Query("activity")
-  ```
-  - `"activity"` (default): `ORDER BY is_pinned DESC, last_post_at DESC, id DESC` (current behavior)
-  - `"newest"`: `ORDER BY is_pinned DESC, created_at DESC, id DESC`
-  - `"replies"`: `ORDER BY is_pinned DESC, post_count DESC, id DESC`
-- [ ] Build the order clause conditionally:
-  ```python
-  if sort == "newest":
-      order_clause = [ForumThread.is_pinned.desc(), ForumThread.created_at.desc(), ForumThread.id.desc()]
-  elif sort == "replies":
-      order_clause = [ForumThread.is_pinned.desc(), ForumThread.post_count.desc(), ForumThread.id.desc()]
-  else:  # activity
-      order_clause = [ForumThread.is_pinned.desc(), ForumThread.last_post_at.desc(), ForumThread.id.desc()]
-  stmt = stmt.order_by(*order_clause)
-  ```
-  Pinned threads always appear first regardless of sort selection.
-- [ ] Add `sort` to the `PageOut` response so the frontend can confirm which sort is active.
-  If `PageOut` is a Pydantic model in `forum_schemas.py`, add `sort: Optional[str] = None`.
-- [ ] Add backend tests:
-  - `?sort=activity` returns thread with most recent `last_post_at` first (excluding pinned)
-  - `?sort=newest` returns thread with most recent `created_at` first (excluding pinned)
-  - `?sort=replies` returns thread with highest `post_count` first (excluding pinned)
-  - Pinned threads appear before all others regardless of sort
+- [x] `sort` query param added to `GET /forum/threads-paged`: `activity` (default), `newest`, `replies`
+- [x] Order clause built conditionally; pinned threads always surface first regardless of sort
+- [x] `sort` field added to `PageOut` response schema so frontend can confirm active sort
 
 ---
 
-## Phase 3: Post Reporting
+## ✅ Phase 3: Post Reporting
 
-Suggested branch: `backend-forum-post-reporting`
+Suggested branch: `backend-forum-post-reporting` — **complete, pending merge**
 
-There is currently no way for users to report individual forum posts. The issues system
-(`app/routes/issues_routes.py`) handles site-level bug/feature reports, not post-level moderation
-reports. This phase adds a separate `ForumReport` model and endpoint.
-
-**Files to create/modify:**
-- `app/models/forum_model.py` — add `ForumReport` model
-- Alembic migration — new `man_review.forum_reports` table
-- `app/routes/forum_routes.py` — new report endpoint and admin list endpoint
-- `app/schemas/forum_schemas.py` — new `ForumReportOut` schema
+Migration applied: `FORUM_REPORTS_MIGRATION.sql`
 
 ### 3a — `ForumReport` model
-
-Add to `app/models/forum_model.py`:
-
-```python
-class ForumReport(Base):
-    __tablename__ = "forum_reports"
-    __table_args__ = (
-        UniqueConstraint("post_id", "reporter_id", name="uq_forum_report_post_reporter"),
-        {"schema": SCHEMA},
-    )
-
-    id = Column(Integer, primary_key=True, index=True)
-    post_id = Column(
-        Integer,
-        ForeignKey(f"{SCHEMA}.forum_posts.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    thread_id = Column(
-        Integer,
-        ForeignKey(f"{SCHEMA}.forum_threads.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    reporter_id = Column(
-        Integer,
-        ForeignKey(f"{SCHEMA}.users.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    reason = Column(String(500), nullable=True)  # optional free-text reason
-    status = Column(String(20), nullable=False, server_default="OPEN")  # OPEN, REVIEWED, DISMISSED
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    reviewed_at = Column(DateTime(timezone=True), nullable=True)
-    reviewed_by_id = Column(
-        Integer,
-        ForeignKey(f"{SCHEMA}.users.id", ondelete="SET NULL"),
-        nullable=True,
-    )
-```
-
-The `UniqueConstraint` prevents a user from submitting multiple reports on the same post.
+- [x] `ForumReport` model added to `app/models/forum_model.py` with `post_id`, `thread_id`, `reporter_id`, `reason`, `status` (OPEN/REVIEWED/DISMISSED), `reviewed_at`, `reviewed_by_id`
+- [x] `UniqueConstraint("post_id", "reporter_id")` prevents duplicate reports per user
 
 ### 3b — Migration
+- [x] `FORUM_REPORTS_MIGRATION.sql` created — `man_review.forum_reports` table with indexes on `post_id`, `reporter_id`, and `status`
 
-- [ ] Create Alembic migration for `man_review.forum_reports`:
-  ```sql
-  CREATE TABLE man_review.forum_reports (
-      id SERIAL PRIMARY KEY,
-      post_id INTEGER NOT NULL REFERENCES man_review.forum_posts(id) ON DELETE CASCADE,
-      thread_id INTEGER NOT NULL REFERENCES man_review.forum_threads(id) ON DELETE CASCADE,
-      reporter_id INTEGER NOT NULL REFERENCES man_review.users(id) ON DELETE CASCADE,
-      reason VARCHAR(500),
-      status VARCHAR(20) NOT NULL DEFAULT 'OPEN',
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      reviewed_at TIMESTAMPTZ,
-      reviewed_by_id INTEGER REFERENCES man_review.users(id) ON DELETE SET NULL,
-      CONSTRAINT uq_forum_report_post_reporter UNIQUE (post_id, reporter_id)
-  );
-  CREATE INDEX ON man_review.forum_reports (post_id);
-  CREATE INDEX ON man_review.forum_reports (reporter_id);
-  ```
-
-### 3c — Report endpoint
-
-Add to `app/routes/forum_routes.py`:
-
-- [ ] `POST /forum/threads/{thread_id}/posts/{post_id}/report` — Auth required
-
-  ```python
-  class ForumReportIn(BaseModel):
-      reason: Optional[str] = None  # optional free-text, max 500 chars
-
-  @router.post("/threads/{thread_id}/posts/{post_id}/report", status_code=201)
-  @limiter.limit("5/hour")
-  async def report_post(
-      request: Request,
-      thread_id: int,
-      post_id: int,
-      payload: ForumReportIn,
-      user: User = Depends(get_current_user),
-      db: AsyncSession = Depends(get_async_session),
-  ):
-  ```
-
-  Logic:
-  1. Confirm the post exists and belongs to the thread (404 if not).
-  2. Block self-reporting: `if post.author_id == user.id` → 403.
-  3. Check for existing report by this user on this post — return 409 with
-     `detail="You have already reported this post."` if duplicate.
-  4. Insert `ForumReport(post_id=post_id, thread_id=thread_id, reporter_id=user.id, reason=payload.reason)`.
-  5. Return `{"message": "Report submitted. Our team will review it shortly."}` with status 201.
-
-- [ ] `GET /forum/reports` — Admin only, paginated list of open reports for moderation review:
-  ```python
-  @router.get("/reports")
-  async def list_reports(
-      status: Optional[str] = Query("OPEN"),  # OPEN, REVIEWED, DISMISSED, or None for all
-      page: int = Query(1, ge=1),
-      page_size: int = Query(20, ge=1, le=100),
-      user: User = Depends(get_current_user),
-      db: AsyncSession = Depends(get_async_session),
-  ):
-  ```
-  Returns paginated reports with reporter username, post excerpt, thread title, and reason.
-
-- [ ] `PATCH /forum/reports/{report_id}` — Admin only, update report status:
-  ```python
-  class ForumReportReviewIn(BaseModel):
-      status: Literal["REVIEWED", "DISMISSED"]
-  ```
-  Sets `status`, `reviewed_at = func.now()`, `reviewed_by_id = user.id`.
-
-- [ ] Add tests:
-  - POST report as author of the post → 403
-  - POST report twice on same post → 409
-  - GET `/forum/reports` as non-admin → 403
-  - PATCH report status as admin → status updates and `reviewed_at` is set
+### 3c — Endpoints
+- [x] `POST /forum/threads/{id}/posts/{post_id}/report` — rate-limited 5/hour; blocks self-reporting (403); blocks duplicates (409); returns 201 on success
+- [x] `GET /forum/reports?status=OPEN` — admin only; paginated; includes `post_excerpt`, `thread_title`, `reporter_username` in response
+- [x] `PATCH /forum/reports/{id}` — admin only; sets status to REVIEWED or DISMISSED with timestamp and reviewer recorded
+- [x] `ForumReportIn`, `ForumReportReviewIn`, `ForumReportOut`, `ForumReportsPageOut` schemas added to `forum_schemas.py`
 
 ---
 

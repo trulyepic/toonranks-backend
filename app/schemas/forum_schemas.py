@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 
 class SeriesRefOut(BaseModel):
@@ -75,6 +75,36 @@ class UpdateThreadIn(BaseModel):
     first_post_markdown: Optional[str] = Field(default=None, min_length=1)
     # Optional: only replace header refs when provided
     series_ids: Optional[List[int]] = None
+
+
+class ForumReportIn(BaseModel):
+    reason: Optional[str] = None  # optional free-text, max 500 chars
+
+class ForumReportReviewIn(BaseModel):
+    status: Literal["REVIEWED", "DISMISSED"]
+
+class ForumReportOut(BaseModel):
+    id: int
+    post_id: int
+    thread_id: int
+    reporter_username: Optional[str] = None
+    reason: Optional[str] = None
+    status: str
+    created_at: str
+    reviewed_at: Optional[str] = None
+    reviewed_by_username: Optional[str] = None
+    # Snapshot of the reported post so admins have context without a separate fetch
+    post_excerpt: Optional[str] = None
+    thread_title: Optional[str] = None
+
+class ForumReportsPageOut(BaseModel):
+    items: List[ForumReportOut]
+    page: int
+    page_size: int
+    total: int
+    total_pages: int
+    has_prev: bool
+    has_next: bool
 
 
 class PageOut(BaseModel):

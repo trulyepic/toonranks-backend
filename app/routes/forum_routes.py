@@ -7,13 +7,14 @@ from sqlalchemy import select, func, delete, or_
 from typing import Literal, Optional, List
 
 from app.database import get_async_session
-from app.models.forum_model import ForumThread, ForumPost, ForumSeriesRef, ForumReaction
+from app.models.forum_model import ForumThread, ForumPost, ForumSeriesRef, ForumReaction, ForumReport
 from app.models.series_model import Series
 from app.models.user_model import User
 
 from app.schemas.forum_schemas import (
     ForumThreadOut, ForumPostOut, CreateThreadIn, CreatePostIn, SeriesRefOut, ThreadSettingsIn, UpdatePostIn,
-    UpdateThreadIn, PageOut, PostsPageOut, ThreadPostsPageOut
+    UpdateThreadIn, PageOut, PostsPageOut, ThreadPostsPageOut,
+    ForumReportIn, ForumReportReviewIn, ForumReportOut, ForumReportsPageOut,
 )
 from app.utils.forum_content import reject_disallowed_images
 
@@ -1290,3 +1291,139 @@ async def get_my_votes(
         has_next=page < total_pages,
     )
 
+
+
+# ------------------------------
+# Post reporting
+# ------------------------------
+
+async def _report_to_out(report: "ForumReport", db: AsyncSession) -> ForumReportOut:
+    """Map a ForumReport row to the output schema, pulling in usernames and post/thread context."""
+    reporter = await db.get(User, report.reporter_id) if report.reporter_id else None
+    reviewed_by = await db.get(User, report.reviewed_by_id) if report.reviewed_by_id else None
+    post = await db.get(ForumPost, report.post_id) if report.post_id else None
+    thread = await db.get(ForumThread, report.thread_id) if report.thread_id else None
+
+    excerpt = None
+    if post and post.content_markdown:
+        excerpt = post.content_markdown[:200] + ("…" if len(post.content_markdown) > 200 else "")
+
+    return ForumReportOut(
+        id=report.id,
+        post_id=report.post_id,
+        thread_id=report.thread_id,
+        reporter_username=getattr(reporter, "username", None),
+        reason=report.reason,
+        status=report.status,
+        created_at=str(report.created_at),
+        reviewed_at=str(report.reviewed_at) if report.reviewed_at else None,
+        reviewed_by_username=getattr(reviewed_by, "username", None),
+        post_excerpt=excerpt,
+        thread_title=getattr(thread, "title", None),
+    )
+
+
+@router.post("/threads/{thread_id}/posts/{post_id}/report", status_code=201)
+@limiter.limit("5/hour")
+async def report_post(
+    request: Request,
+    thread_id: int,
+    post_id: int,
+    payload: ForumReportIn,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """Submit a report on a forum post. One report per user per post."""
+    post = await db.get(ForumPost, post_id)
+    if not post or post.thread_id != thread_id:
+        raise HTTPException(status_code=404, detail="Post not found")
+
+    if post.author_id == user.id:
+        raise HTTPException(status_code=403, detail="You cannot report your own post.")
+
+    existing = (
+        await db.execute(
+            select(ForumReport).where(
+                ForumReport.post_id == post_id,
+                ForumReport.reporter_id == user.id,
+            ).limit(1)
+        )
+    ).scalars().first()
+    if existing:
+        raise HTTPException(status_code=409, detail="You have already reported this post.")
+
+    reason = (payload.reason or "").strip()[:500] or None
+
+    db.add(ForumReport(
+        post_id=post_id,
+        thread_id=thread_id,
+        reporter_id=user.id,
+        reason=reason,
+        status="OPEN",
+    ))
+    await db.commit()
+    return {"message": "Report submitted. Our team will review it shortly."}
+
+
+@router.get("/reports", response_model=ForumReportsPageOut)
+async def list_reports(
+    status: Optional[str] = Query("OPEN"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """Admin-only: paginated list of post reports for moderation review."""
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    filters = []
+    if status:
+        filters.append(ForumReport.status == status.upper())
+
+    total_stmt = select(func.count(ForumReport.id))
+    if filters:
+        total_stmt = total_stmt.where(*filters)
+    total = int((await db.execute(total_stmt)).scalar_one() or 0)
+
+    stmt = select(ForumReport).order_by(ForumReport.created_at.desc())
+    if filters:
+        stmt = stmt.where(*filters)
+    stmt = stmt.offset((page - 1) * page_size).limit(page_size)
+
+    rows = (await db.execute(stmt)).scalars().all()
+    items = [await _report_to_out(r, db) for r in rows]
+
+    total_pages = max(1, math.ceil(total / page_size))
+    return ForumReportsPageOut(
+        items=items,
+        page=page,
+        page_size=page_size,
+        total=total,
+        total_pages=total_pages,
+        has_prev=page > 1,
+        has_next=page < total_pages,
+    )
+
+
+@router.patch("/reports/{report_id}", response_model=ForumReportOut)
+async def review_report(
+    report_id: int,
+    payload: ForumReportReviewIn,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """Admin-only: mark a report as REVIEWED or DISMISSED."""
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    report = await db.get(ForumReport, report_id)
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+
+    report.status = payload.status
+    report.reviewed_at = func.now()
+    report.reviewed_by_id = user.id
+    await db.commit()
+    await db.refresh(report)
+    return await _report_to_out(report, db)
