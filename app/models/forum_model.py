@@ -15,6 +15,23 @@ from app.database import Base
 
 SCHEMA = "man_review"
 
+
+class ForumCategory(Base):
+    """Top-level board that threads are organised into (e.g. General Discussion, Series Talk)."""
+    __tablename__ = "forum_categories"
+    __table_args__ = ({"schema": SCHEMA},)
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), nullable=False, unique=True)
+    slug = Column(String(100), nullable=False, unique=True, index=True)
+    description = Column(String(500), nullable=True)
+    position = Column(Integer, nullable=False, server_default="0", default=0)
+    is_visible = Column(Boolean, nullable=False, server_default=text("true"), default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    threads = relationship("ForumThread", back_populates="category")
+
+
 class ForumThread(Base):
     __tablename__ = "forum_threads"
     __table_args__ = (
@@ -33,6 +50,13 @@ class ForumThread(Base):
         index=True,
     )
 
+    category_id = Column(
+        Integer,
+        ForeignKey(f"{SCHEMA}.forum_categories.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
@@ -45,6 +69,7 @@ class ForumThread(Base):
     is_pinned = Column(Boolean, nullable=False, server_default=text("false"), default=False)
 
     # relationships
+    category = relationship("ForumCategory", back_populates="threads")
     posts = relationship(
         "ForumPost",
         back_populates="thread",

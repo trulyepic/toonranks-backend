@@ -7,7 +7,7 @@ from sqlalchemy import select, func, delete, or_
 from typing import Literal, Optional, List
 
 from app.database import get_async_session
-from app.models.forum_model import ForumThread, ForumPost, ForumSeriesRef, ForumReaction, ForumReport, ForumFollower, ForumBookmark
+from app.models.forum_model import ForumThread, ForumPost, ForumSeriesRef, ForumReaction, ForumReport, ForumFollower, ForumBookmark, ForumCategory
 from app.models.series_model import Series
 from app.models.user_model import User
 
@@ -16,6 +16,7 @@ from app.schemas.forum_schemas import (
     UpdateThreadIn, PageOut, PostsPageOut, ThreadPostsPageOut,
     ForumReportIn, ForumReportReviewIn, ForumReportOut, ForumReportsPageOut,
     FollowToggleOut, BookmarkToggleOut,
+    ForumCategoryOut, CreateCategoryIn, UpdateCategoryIn,
 )
 from app.utils.forum_content import reject_disallowed_images
 
@@ -216,6 +217,12 @@ async def _thread_to_out(t: ForumThread, db: AsyncSession, viewer_id: Optional[i
         )).scalars().first()
         viewer_is_following = follow_row is not None
 
+    category_id = getattr(t, "category_id", None)
+    category_name: Optional[str] = None
+    if category_id:
+        cat = await db.get(ForumCategory, category_id)
+        category_name = cat.name if cat else None
+
     return ForumThreadOut(
         id=t.id,
         title=t.title,
@@ -230,6 +237,8 @@ async def _thread_to_out(t: ForumThread, db: AsyncSession, viewer_id: Optional[i
         is_pinned=bool(getattr(t, "is_pinned", False)),
         view_count=int(getattr(t, "view_count", 0) or 0),
         viewer_is_following=viewer_is_following,
+        category_id=category_id,
+        category_name=category_name,
     )
 
 async def _post_to_out(p: ForumPost, db: AsyncSession, viewer: Optional["User"]=None) -> ForumPostOut:
@@ -337,7 +346,13 @@ request: Request,
             detail=f"Thread limit reached ({MAX_THREADS_PER_USER}). Delete an existing thread to create a new one.",
         )
 
-    thread = ForumThread(title=payload.title, author_id=user.id)
+    # Validate category if provided
+    if payload.category_id:
+        cat = await db.get(ForumCategory, payload.category_id)
+        if not cat:
+            raise HTTPException(status_code=404, detail="Category not found")
+
+    thread = ForumThread(title=payload.title, author_id=user.id, category_id=payload.category_id)
     db.add(thread)
     await db.flush()  # get thread.id
 
@@ -423,6 +438,8 @@ async def list_threads_paged(
     page_size: int = Query(20, ge=1, le=100),
     author_id: Optional[int] = None,  # allows "my threads" count without fetching 1000 rows
     sort: Optional[Literal["activity", "newest", "replies"]] = Query("activity"),
+    category_id: Optional[int] = None,
+    category_slug: Optional[str] = None,
     db: AsyncSession = Depends(get_async_session),
     _viewer: Optional[User] = Depends(get_current_user_optional),
 ):
@@ -431,6 +448,19 @@ async def list_threads_paged(
         filters.append(ForumThread.title.ilike(f"%{q}%"))
     if author_id is not None:
         filters.append(ForumThread.author_id == author_id)
+
+    # Category filtering — slug takes priority over id for clean URLs
+    if category_slug:
+        cat_row = (await db.execute(
+            select(ForumCategory).where(ForumCategory.slug == category_slug).limit(1)
+        )).scalars().first()
+        if cat_row:
+            filters.append(ForumThread.category_id == cat_row.id)
+        else:
+            # Unknown slug → return empty page (not a 404; keeps UI simple)
+            filters.append(ForumThread.category_id == -1)
+    elif category_id is not None:
+        filters.append(ForumThread.category_id == category_id)
 
     # total
     total_stmt = select(func.count(ForumThread.id))
@@ -1078,6 +1108,16 @@ async def update_thread(
         for sid in map(int, payload.series_ids):
             db.add(ForumSeriesRef(thread_id=thread_id, series_id=sid))
 
+    # Re-categorize if category_id provided (pass 0 to clear)
+    if payload.category_id is not None:
+        if payload.category_id == 0:
+            thread.category_id = None
+        else:
+            cat = await db.get(ForumCategory, payload.category_id)
+            if not cat:
+                raise HTTPException(status_code=404, detail="Category not found")
+            thread.category_id = payload.category_id
+
     await db.commit()
     await db.refresh(thread)
     return await _thread_to_out(thread, db)
@@ -1597,3 +1637,143 @@ async def get_my_bookmarks(
         has_prev=page > 1,
         has_next=page < total_pages,
     )
+
+
+# ==============================
+# Forum Categories
+# ==============================
+
+@router.get("/categories", response_model=List[ForumCategoryOut])
+async def list_categories(
+    db: AsyncSession = Depends(get_async_session),
+):
+    """Public. Returns all visible categories ordered by position, each with a thread count."""
+    rows = (await db.execute(
+        select(ForumCategory)
+        .where(ForumCategory.is_visible == True)
+        .order_by(ForumCategory.position.asc(), ForumCategory.id.asc())
+    )).scalars().all()
+
+    out = []
+    for cat in rows:
+        count = int((await db.execute(
+            select(func.count(ForumThread.id)).where(ForumThread.category_id == cat.id)
+        )).scalar_one() or 0)
+        out.append(ForumCategoryOut(
+            id=cat.id,
+            name=cat.name,
+            slug=cat.slug,
+            description=cat.description,
+            position=cat.position,
+            thread_count=count,
+        ))
+    return out
+
+
+@router.post("/categories", response_model=ForumCategoryOut, status_code=201)
+async def create_category(
+    payload: CreateCategoryIn,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """Admin only. Create a new forum category."""
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    # Unique name + slug enforced by DB constraint, but give a nice error
+    existing = (await db.execute(
+        select(ForumCategory).where(
+            (ForumCategory.name == payload.name) | (ForumCategory.slug == payload.slug)
+        ).limit(1)
+    )).scalars().first()
+    if existing:
+        raise HTTPException(status_code=409, detail="A category with that name or slug already exists")
+
+    cat = ForumCategory(
+        name=payload.name,
+        slug=payload.slug,
+        description=payload.description,
+        position=payload.position or 0,
+    )
+    db.add(cat)
+    await db.commit()
+    await db.refresh(cat)
+
+    return ForumCategoryOut(
+        id=cat.id,
+        name=cat.name,
+        slug=cat.slug,
+        description=cat.description,
+        position=cat.position,
+        thread_count=0,
+    )
+
+
+@router.patch("/categories/{category_id}", response_model=ForumCategoryOut)
+async def update_category(
+    category_id: int,
+    payload: UpdateCategoryIn,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """Admin only. Update name, slug, description, position, or visibility."""
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    cat = await db.get(ForumCategory, category_id)
+    if not cat:
+        raise HTTPException(status_code=404, detail="Category not found")
+
+    if payload.name is not None:
+        cat.name = payload.name
+    if payload.slug is not None:
+        cat.slug = payload.slug
+    if payload.description is not None:
+        cat.description = payload.description
+    if payload.position is not None:
+        cat.position = payload.position
+    if payload.is_visible is not None:
+        cat.is_visible = payload.is_visible
+
+    await db.commit()
+    await db.refresh(cat)
+
+    thread_count = int((await db.execute(
+        select(func.count(ForumThread.id)).where(ForumThread.category_id == cat.id)
+    )).scalar_one() or 0)
+
+    return ForumCategoryOut(
+        id=cat.id,
+        name=cat.name,
+        slug=cat.slug,
+        description=cat.description,
+        position=cat.position,
+        thread_count=thread_count,
+    )
+
+
+@router.delete("/categories/{category_id}", status_code=204)
+async def delete_category(
+    category_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """Admin only. Delete a category only if it has no threads; returns 409 otherwise."""
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    cat = await db.get(ForumCategory, category_id)
+    if not cat:
+        raise HTTPException(status_code=404, detail="Category not found")
+
+    thread_count = int((await db.execute(
+        select(func.count(ForumThread.id)).where(ForumThread.category_id == category_id)
+    )).scalar_one() or 0)
+    if thread_count > 0:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot delete: {thread_count} thread(s) still belong to this category. Re-assign them first.",
+        )
+
+    await db.delete(cat)
+    await db.commit()
