@@ -1534,6 +1534,24 @@ async def review_report(
     return await _report_to_out(report, db)
 
 
+@router.delete("/reports/{report_id}", status_code=204)
+async def delete_report(
+    report_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """Admin-only: permanently delete a report record."""
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    report = await db.get(ForumReport, report_id)
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+
+    await db.delete(report)
+    await db.commit()
+
+
 # ------------------------------
 # Thread following
 # ------------------------------
