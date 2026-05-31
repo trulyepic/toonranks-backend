@@ -2,12 +2,13 @@ import math
 from typing import List, Optional
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.routes.auth import get_db
+from app.limiter import limiter
 from app.models.user_model import User
 from app.models.user_favourite import UserFavourite
 from app.models.series_model import Series
@@ -75,6 +76,41 @@ class LeaderboardPageOut(BaseModel):
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
+
+class UserSearchResult(BaseModel):
+    username: str
+    avatar_url: Optional[str] = None
+    avatar_preset: Optional[str] = None
+
+
+@router.get("/search", response_model=List[UserSearchResult])
+@limiter.limit("30/minute")
+async def search_users(
+    request: Request,
+    q: str = Query(..., min_length=1, max_length=30),
+    limit: int = Query(8, ge=1, le=20),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Lightweight username prefix search for @-mention autocomplete.
+    Returns matching users ordered by username.
+    """
+    rows = (await db.execute(
+        select(User.username, User.avatar_url, User.avatar_preset)
+        .where(User.username.ilike(f"{q}%"))
+        .order_by(User.username.asc())
+        .limit(limit)
+    )).all()
+
+    return [
+        UserSearchResult(
+            username=row.username,
+            avatar_url=row.avatar_url,
+            avatar_preset=row.avatar_preset,
+        )
+        for row in rows
+    ]
+
 
 @router.get("/leaderboard", response_model=LeaderboardPageOut)
 async def get_leaderboard(
