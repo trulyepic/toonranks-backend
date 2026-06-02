@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.models.series_model import SeriesStatus
 from app.routes import series_routes
 
 client = TestClient(app)
@@ -107,6 +108,62 @@ def test_rankings_genre_and_type_params_are_combined():
     assert len(data) == 1
     assert data[0]["type"] == "MANHWA"
     assert data[0]["genre"] == "Fantasy"
+
+
+def test_rankings_status_param_is_accepted_and_filters_results():
+    # Simulate the DB already having applied the status filter — only complete series returned.
+    rows = [
+        (
+            make_series(
+                id=4,
+                title="Finished Tale",
+                genre="Action",
+                status=SeriesStatus.COMPLETE,
+            ),
+            None,
+        ),
+    ]
+    session = FakeRankingsSession(rows)
+    cleanup = override_rankings_db(session)
+
+    try:
+        response = client.get("/series/rankings?status=COMPLETE")
+    finally:
+        cleanup()
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["title"] == "Finished Tale"
+    assert data[0]["status"] == "COMPLETE"
+
+
+def test_rankings_status_and_type_params_are_combined():
+    rows = [
+        (
+            make_series(
+                id=5,
+                title="Ongoing Manhwa",
+                genre="Fantasy",
+                type="MANHWA",
+                status=SeriesStatus.ONGOING,
+            ),
+            None,
+        ),
+    ]
+    session = FakeRankingsSession(rows)
+    cleanup = override_rankings_db(session)
+
+    try:
+        response = client.get("/series/rankings?type=MANHWA&status=ONGOING")
+    finally:
+        cleanup()
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["type"] == "MANHWA"
+    assert data[0]["status"] == "ONGOING"
 
 
 def test_rankings_genre_filter_returns_empty_list_when_no_match():
