@@ -13,6 +13,15 @@ AWS_BUCKET_NAME = os.getenv("AWS_BUCKET_NAME")
 SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
 
+# Additional allowed CORS origins beyond the built-in production/localhost list.
+# Comma-separated, e.g. "https://uat.d44czcdkzilpz.amplifyapp.com,https://uat.toonranks.com".
+# Lets us allow UAT / preview frontends without a code change.
+EXTRA_CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("EXTRA_CORS_ORIGINS", "").split(",")
+    if origin.strip()
+]
+
 
 FORUM_MEDIA_CDN_BASE = os.getenv(
     "FORUM_MEDIA_CDN_BASE",

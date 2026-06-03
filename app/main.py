@@ -14,6 +14,7 @@ from fastapi.responses import RedirectResponse, JSONResponse
 from app.routes import series_routes, auth, series_detail
 
 from app.database import Base, engine
+from app.config import EXTRA_CORS_ORIGINS
 
 # 🔒 Rate limiting setup
 
@@ -61,6 +62,7 @@ app.add_middleware(
         "http://127.0.0.1:5173",
         "https://toonranks.com",
         "https://www.toonranks.com",
+        *EXTRA_CORS_ORIGINS,
     ],
     allow_credentials=True,
     allow_methods=["*"],
