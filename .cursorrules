@@ -1,0 +1,39 @@
+# Toon Ranks Backend — Cursor Rules
+
+## Project identity
+FastAPI + SQLAlchemy async backend for a manga/manhwa/manhua ranking platform.
+Python 3.11+, PostgreSQL (schema: man_review), Railway deployment.
+
+## Hard rules
+- Never work on `main` — always create a branch
+- All database access is async — use `await` on every execute/commit/refresh
+- Every ORM model must have `__table_args__ = {"schema": "man_review"}` — omitting this breaks prod
+- Use `app.database.get_async_session` as the DB dependency in new routes
+- Use `app.deps.admin` for all auth/role guards — never inline role string checks
+- Rate-limit any public mutating endpoint using `@limiter.limit()` from `app.limiter`
+- Line length: 100. Linter: Ruff (`ruff check .`)
+
+## Patterns to follow
+- Router files go in `app/routes/`, registered in `app/main.py` via `app.include_router(...)`
+- Pydantic schemas go in `app/schemas/`
+- Pure helpers go in `app/utils/`
+- Tests go in `tests/`, file name `*_test.py`, use existing `conftest.py` fixtures
+
+## Domain vocabulary
+- Series types: MANGA, MANHWA, MANHUA
+- Approval states: DRAFT → PENDING → APPROVED
+- User roles: GENERAL < CONTRIBUTOR < ADMIN
+- Scoring formula: final_score = avg(story, characters, worldbuilding, art, drama_or_fight) — all rated 1-10
+
+## Key reference files
+- Data model: docs/DATA_MODEL.md
+- All endpoints: docs/API.md
+- Conventions: docs/CONVENTIONS.md
+- Architecture: docs/ARCHITECTURE.md
+
+## What to avoid
+- Sync SQLAlchemy calls inside async functions
+- Hardcoded role strings in route logic
+- New models without the man_review schema
+- Startup schema changes outside of app/main.py on_startup
+- Committing/pushing without being asked
