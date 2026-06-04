@@ -2,6 +2,10 @@
 
 AI coding assistant entry point. Read this before touching any code.
 
+> ⚠️ **Read `CONSTRAINTS.md` first.** It defines the non-negotiable workflow rules:
+> never commit/push without explicit instruction, always end every task with test
+> steps + a commit message + a PR description, one branch per task.
+
 ---
 
 ## What this project is
@@ -114,9 +118,12 @@ ruff check . --fix
 
 ## Critical rules — read before writing any code
 
-1. **Never work directly on `main`.** Create a branch. Branch naming: `backend-<short-desc>` (e.g. `backend-fix-vote-count`).
-2. **Never commit or push** unless the user explicitly asks.
-3. **All database access is async.** Use `await db.execute(...)`, `await db.commit()`, etc. Never call sync SQLAlchemy methods.
+> Full workflow constraints are in `CONSTRAINTS.md`. The short version:
+
+1. **Never commit or push without explicit instruction from the owner.** Finishing a task does not mean you commit. Wait to be told.
+2. **Always end every task with:** numbered test steps (pytest / API calls), a one-line commit message, and a short GitHub PR description. No exceptions.
+3. **Never work directly on `main`.** Create a branch. Branch naming: `backend-<short-desc>` (e.g. `backend-fix-vote-count`).
+4. **All database access is async.** Use `await db.execute(...)`, `await db.commit()`, etc. Never call sync SQLAlchemy methods.
 4. **Session dependency:** use `get_async_session` from `app.database` for most routes. Only `series_routes` and `auth` use the local `get_db()` helper — don't mix them in new code; prefer `get_async_session`.
 5. **Schema is `man_review`.** Every model has `__table_args__ = {"schema": "man_review"}`. Never omit this.
 6. **Role system:** `GENERAL` < `CONTRIBUTOR` < `ADMIN`. Use deps from `app.deps.admin` (`require_admin`, `require_series_submitter`, `is_admin`, `can_submit_series`). Never hard-code role strings in route logic.
