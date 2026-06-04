@@ -33,6 +33,10 @@ docs/                reference docs (architecture, data model, API, conventions)
 
 ## Non-negotiable rules
 
+> See `CONSTRAINTS.md` for the full workflow. Key points repeated here:
+
+- **Never commit or push without explicit instruction** — wait to be told; finishing a task does not mean commit
+- **Always end every task with** numbered test steps + one-line commit message + short PR description
 - **Never work on `main` directly** — always a branch
 - **All DB calls must be async** — `await session.execute(...)`, `await session.commit()`
 - **All models must include** `__table_args__ = {"schema": "man_review"}`

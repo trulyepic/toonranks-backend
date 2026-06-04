@@ -5,6 +5,9 @@ FastAPI + SQLAlchemy async backend for a manga/manhwa/manhua ranking platform.
 Python 3.11+, PostgreSQL (schema: man_review), Railway deployment.
 
 ## Hard rules
+- **Read CONSTRAINTS.md** — it defines the full workflow and handoff requirements
+- Never commit or push without explicit instruction from the owner
+- Always end every task with: numbered test steps + one-line commit message + short PR description
 - Never work on `main` — always create a branch
 - All database access is async — use `await` on every execute/commit/refresh
 - Every ORM model must have `__table_args__ = {"schema": "man_review"}` — omitting this breaks prod
