@@ -311,3 +311,75 @@ def test_search_with_type_scopes_rank_within_type():
     assert len(data) == 1
     assert data[0]["title"] == "Second Manhwa"
     assert data[0]["rank"] == 2  # its rank within MANHWA, not 1
+
+
+# ── /series/rankings: `sort` controls display order, rank stays score-based ──
+
+
+def _ranking_rows():
+    # Scores: Zebra=9 (#1), Alpha=7 (#2), Mango=0 (unranked)
+    return [
+        (make_series(id=1, title="Zebra", genre="Action", vote_count=5), make_detail(9)),
+        (make_series(id=2, title="Alpha", genre="Action", vote_count=50), make_detail(7)),
+        (make_series(id=3, title="Mango", genre="Action", vote_count=1), None),
+    ]
+
+
+def test_rankings_default_sort_is_by_score():
+    session = FakeRankingsSession(_ranking_rows())
+    cleanup = override_rankings_db(session)
+    try:
+        response = client.get("/series/rankings")
+    finally:
+        cleanup()
+
+    assert response.status_code == 200
+    data = response.json()
+    assert [d["title"] for d in data] == ["Zebra", "Alpha", "Mango"]
+    assert [d["rank"] for d in data] == [1, 2, None]
+
+
+def test_rankings_sort_by_votes_keeps_score_rank():
+    session = FakeRankingsSession(_ranking_rows())
+    cleanup = override_rankings_db(session)
+    try:
+        response = client.get("/series/rankings?sort=votes")
+    finally:
+        cleanup()
+
+    assert response.status_code == 200
+    data = response.json()
+    # Display order by votes desc: Alpha(50), Zebra(5), Mango(1)
+    assert [d["title"] for d in data] == ["Alpha", "Zebra", "Mango"]
+    # Rank still reflects score: Alpha #2, Zebra #1, Mango None
+    assert {d["title"]: d["rank"] for d in data} == {
+        "Alpha": 2,
+        "Zebra": 1,
+        "Mango": None,
+    }
+
+
+def test_rankings_sort_by_newest_orders_by_id_desc():
+    session = FakeRankingsSession(_ranking_rows())
+    cleanup = override_rankings_db(session)
+    try:
+        response = client.get("/series/rankings?sort=newest")
+    finally:
+        cleanup()
+
+    assert response.status_code == 200
+    data = response.json()
+    assert [d["title"] for d in data] == ["Mango", "Alpha", "Zebra"]
+
+
+def test_rankings_sort_by_title_orders_alphabetically():
+    session = FakeRankingsSession(_ranking_rows())
+    cleanup = override_rankings_db(session)
+    try:
+        response = client.get("/series/rankings?sort=title")
+    finally:
+        cleanup()
+
+    assert response.status_code == 200
+    data = response.json()
+    assert [d["title"] for d in data] == ["Alpha", "Mango", "Zebra"]
