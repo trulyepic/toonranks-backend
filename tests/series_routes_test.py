@@ -200,3 +200,114 @@ def test_rankings_response_includes_required_fields():
     assert item["vote_count"] == 42
     assert "final_score" in item
     assert "rank" in item
+
+
+# ── /series/search: results must keep their TRUE rank, not a re-ranked position ──
+
+
+def make_detail(score):
+    """Detail whose every category averages to `score`, so final_score == score."""
+    return SimpleNamespace(
+        story_total=score, story_count=1,
+        characters_total=score, characters_count=1,
+        worldbuilding_total=score, worldbuilding_count=1,
+        art_total=score, art_count=1,
+        drama_or_fight_total=score, drama_or_fight_count=1,
+    )
+
+
+class FakeScalars:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def all(self):
+        return self._rows
+
+
+class FakeResult:
+    def __init__(self, rows=None, scalar_rows=None):
+        self._rows = rows or []
+        self._scalar_rows = scalar_rows or []
+
+    def all(self):
+        return self._rows
+
+    def scalars(self):
+        return FakeScalars(self._scalar_rows)
+
+
+class FakeQueuedSession:
+    """Returns queued results in order — one per execute() call.
+
+    The search endpoint executes twice: first the full ranking
+    (read via .all() of (series, detail) tuples), then the search matches
+    (read via .scalars().all()).
+    """
+
+    def __init__(self, results):
+        self._results = list(results)
+        self._i = 0
+
+    async def execute(self, _stmt):
+        result = self._results[self._i]
+        self._i += 1
+        return result
+
+
+def test_search_results_keep_true_global_rank():
+    # Full ranking: scores 9,8,7,6 -> global ranks 1,2,3,4
+    full_rows = [
+        (make_series(id=1, title="Alpha", genre="Action"), make_detail(9)),
+        (make_series(id=2, title="Bravo", genre="Action"), make_detail(8)),
+        (make_series(id=3, title="Charlie Knight", genre="Action"), make_detail(7)),
+        (make_series(id=4, title="Delta Knight", genre="Action"), make_detail(6)),
+    ]
+    # Search for "knight" matches only the two lower-ranked series.
+    search_matches = [
+        make_series(id=3, title="Charlie Knight", genre="Action"),
+        make_series(id=4, title="Delta Knight", genre="Action"),
+    ]
+    session = FakeQueuedSession([
+        FakeResult(rows=full_rows),
+        FakeResult(scalar_rows=search_matches),
+    ])
+    cleanup = override_rankings_db(session)
+
+    try:
+        response = client.get("/series/search?query=knight")
+    finally:
+        cleanup()
+
+    assert response.status_code == 200
+    data = response.json()
+    ranks = {item["title"]: item["rank"] for item in data}
+    # Must reflect their position in the FULL ranking (3 and 4),
+    # NOT a re-ranked 1 and 2 among the matches.
+    assert ranks == {"Charlie Knight": 3, "Delta Knight": 4}
+
+
+def test_search_with_type_scopes_rank_within_type():
+    # Full ranking already scoped to MANHWA: scores 9,8 -> within-type ranks 1,2
+    full_rows = [
+        (make_series(id=11, title="Top Manhwa", genre="Action", type="MANHWA"), make_detail(9)),
+        (make_series(id=12, title="Second Manhwa", genre="Action", type="MANHWA"), make_detail(8)),
+    ]
+    search_matches = [
+        make_series(id=12, title="Second Manhwa", genre="Action", type="MANHWA"),
+    ]
+    session = FakeQueuedSession([
+        FakeResult(rows=full_rows),
+        FakeResult(scalar_rows=search_matches),
+    ])
+    cleanup = override_rankings_db(session)
+
+    try:
+        response = client.get("/series/search?query=manhwa&type=MANHWA")
+    finally:
+        cleanup()
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["title"] == "Second Manhwa"
+    assert data[0]["rank"] == 2  # its rank within MANHWA, not 1
