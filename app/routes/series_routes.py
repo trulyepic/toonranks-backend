@@ -484,11 +484,54 @@ async def get_series_summary(
 @router.get("/series/search", response_model=List[RankedSeriesOut])
 async def search_series(
     query: str = Query(..., description="Search keyword"),
+    type: Optional[str] = Query(
+        None,
+        description=(
+            "Optional series type (MANGA/MANHWA/MANHUA). When provided, both the "
+            "results and the rank are scoped to that category, so each result keeps "
+            "its true rank within the type. When omitted, ranks reflect the full "
+            "'All' ranking."
+        ),
+    ),
     db: AsyncSession = Depends(get_db)
 ):
-    stmt = select(Series, SeriesDetail).join(
+    def safe_avg(total, count):
+        return total / count if count else 0
+
+    def compute_final_score(detail) -> Decimal:
+        if not detail:
+            return Decimal(0)
+        story = safe_avg(detail.story_total, detail.story_count)
+        chars = safe_avg(detail.characters_total, detail.characters_count)
+        world = safe_avg(detail.worldbuilding_total, detail.worldbuilding_count)
+        art = safe_avg(detail.art_total, detail.art_count)
+        drama = safe_avg(detail.drama_or_fight_total, detail.drama_or_fight_count)
+        return Decimal((story + chars + world + art + drama) / 5)
+
+    # 1) Build the FULL approved ranking (optionally scoped to a type) so that each
+    #    search result can keep its TRUE rank — its position in the overall ranking —
+    #    instead of being re-ranked among only the search matches.
+    full_stmt = select(Series, SeriesDetail).join(
         SeriesDetail, Series.id == SeriesDetail.series_id, isouter=True
-    ).where(
+    ).where(Series.approval_status == SeriesApprovalStatus.APPROVED.value)
+    if type:
+        full_stmt = full_stmt.where(Series.type == type.upper())
+
+    full_rows = (await db.execute(full_stmt)).all()
+
+    scored = [(series.id, compute_final_score(detail)) for series, detail in full_rows]
+    score_by_id = {sid: score for sid, score in scored}
+
+    # Only series with a positive score are ranked; rank by score descending.
+    ranked_ids = sorted(
+        (entry for entry in scored if entry[1] > 0),
+        key=lambda entry: entry[1],
+        reverse=True,
+    )
+    rank_by_id = {sid: idx + 1 for idx, (sid, _) in enumerate(ranked_ids)}
+
+    # 2) Run the search query (scoped to the same type, when provided).
+    stmt = select(Series).where(
         and_(
             Series.approval_status == SeriesApprovalStatus.APPROVED.value,
             or_(
@@ -501,28 +544,14 @@ async def search_series(
             ),
         )
     )
+    if type:
+        stmt = stmt.where(Series.type == type.upper())
 
-    result = await db.execute(stmt)
-    results = result.all()
+    matches = (await db.execute(stmt)).scalars().all()
 
-    def safe_avg(total, count):
-        return total / count if count else 0
-
-    ranked_series = []
-    for series, detail in results:
-        if detail:
-            story = safe_avg(detail.story_total, detail.story_count)
-            chars = safe_avg(detail.characters_total, detail.characters_count)
-            world = safe_avg(detail.worldbuilding_total, detail.worldbuilding_count)
-            art = safe_avg(detail.art_total, detail.art_count)
-            drama = safe_avg(detail.drama_or_fight_total, detail.drama_or_fight_count)
-            # final_score = round((story + chars + world + art + drama) / 5, 2)
-            final_score = Decimal((story + chars + world + art + drama) / 5)
-
-        else:
-            final_score = 0.0
-
-        ranked_series.append({
+    payload = []
+    for series in matches:
+        payload.append({
             "id": series.id,
             "title": series.title,
             "genre": series.genre,
@@ -531,17 +560,13 @@ async def search_series(
             "artist": series.artist,
             "cover_url": series.cover_url,
             "vote_count": series.vote_count or 0,
-            "final_score": final_score,
+            # Reuse the score computed for the full ranking (every match is part of
+            # the approved set, so it is always present in score_by_id).
+            "final_score": score_by_id.get(series.id, Decimal(0)),
             "status": series.status.name if series.status else None,
+            "rank": rank_by_id.get(series.id),  # None for unranked (score 0)
         })
 
-    ranked = [s for s in ranked_series if s["final_score"] > 0]
-    unranked = [s for s in ranked_series if s["final_score"] == 0]
-
-    ranked.sort(key=lambda x: x["final_score"], reverse=True)
-    for idx, s in enumerate(ranked):
-        s["rank"] = idx + 1
-    for s in unranked:
-        s["rank"] = None
-
-    return ranked + unranked
+    # Present results in true-rank order, with unranked (rank None) last.
+    payload.sort(key=lambda item: (item["rank"] is None, item["rank"] or 0))
+    return payload
