@@ -4,7 +4,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
-from sqlalchemy import select, func
+from sqlalchemy import select, func, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.routes.auth import get_db
@@ -120,17 +120,18 @@ async def get_leaderboard(
 ):
     """
     Ranked list of Rankers ordered by cred_score descending.
-    Only users with cred_score > 0 appear.
+    All non-admin users appear; new users with no activity (cred_score 0) sort to
+    the bottom and climb as they participate. Admins are excluded from ranking.
     """
     # Total ranked users (admins excluded)
     total_stmt = select(func.count(User.id)).where(
-        User.cred_score > 0,
         User.role != "ADMIN",
     )
     total = int((await db.execute(total_stmt)).scalar_one() or 0)
     total_pages = max(1, math.ceil(total / page_size))
 
-    # Page of ranked users with post counts and distinct series rated
+    # Page of users with post counts and distinct series rated. Ties (e.g. all the
+    # 0-cred newcomers) break by id ascending, so order is stable across pages.
     offset = (page - 1) * page_size
     stmt = (
         select(
@@ -140,7 +141,7 @@ async def get_leaderboard(
         )
         .outerjoin(ForumPost, ForumPost.author_id == User.id)
         .outerjoin(UserVote, UserVote.user_id == User.id)
-        .where(User.cred_score > 0, User.role != "ADMIN")
+        .where(User.role != "ADMIN")
         .group_by(User.id)
         .order_by(User.cred_score.desc(), User.id.asc())
         .offset(offset)
@@ -190,16 +191,22 @@ async def get_public_profile(
             detail=f"User '{username}' not found.",
         )
 
-    # ── Cred rank (None for admins and users with score 0) ───────────────
+    # ── Cred rank (None only for admins, who are excluded from ranking) ──────
+    # Every non-admin user is ranked, including newcomers with cred_score 0 (they
+    # sit at the bottom and climb as they participate). Uses the same tie-break as
+    # the leaderboard: higher cred first, then smaller id.
     cred_score = user.cred_score or 0
     rank: Optional[int] = None
-    if cred_score > 0 and user.role != "ADMIN":
+    if user.role != "ADMIN":
         rank_stmt = select(func.count(User.id)).where(
-            User.cred_score > cred_score,
             User.role != "ADMIN",
+            or_(
+                User.cred_score > cred_score,
+                and_(User.cred_score == cred_score, User.id < user.id),
+            ),
         )
-        users_above = int((await db.execute(rank_stmt)).scalar_one() or 0)
-        rank = users_above + 1
+        users_before = int((await db.execute(rank_stmt)).scalar_one() or 0)
+        rank = users_before + 1
 
     # ── Post count ────────────────────────────────────────────────────────
     post_count_stmt = select(func.count(ForumPost.id)).where(
