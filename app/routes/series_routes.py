@@ -303,41 +303,33 @@ async def get_ranked_series(
     ),
     db: AsyncSession = Depends(get_db)
 ):
+    def safe_avg(total, count):
+        return total / count if count else 0
+
+    def compute_final_score(detail) -> Decimal:
+        if not detail:
+            return Decimal(0)
+        story = safe_avg(detail.story_total, detail.story_count)
+        chars = safe_avg(detail.characters_total, detail.characters_count)
+        world = safe_avg(detail.worldbuilding_total, detail.worldbuilding_count)
+        art = safe_avg(detail.art_total, detail.art_count)
+        drama = safe_avg(detail.drama_or_fight_total, detail.drama_or_fight_count)
+        return Decimal((story + chars + world + art + drama) / 5)
+
+    # TYPE scopes the ranking. GENRE and STATUS are display refinements that must
+    # NOT change a title's rank (a #10 title stays #10 when you filter to its
+    # genre). So rank over the full (optionally type-scoped) set first, then keep
+    # only the rows that pass the genre/status filters — preserving their ranks.
     stmt = select(Series, SeriesDetail).join(
         SeriesDetail, Series.id == SeriesDetail.series_id, isouter=True
     ).where(Series.approval_status == SeriesApprovalStatus.APPROVED.value)
-
     if type:
         stmt = stmt.where(Series.type == type.upper())
 
-    if genre:
-        stmt = stmt.where(Series.genre.ilike(f"%{genre}%"))
+    rows = (await db.execute(stmt)).all()
 
-    if status:
-        stmt = stmt.where(Series.status == status.upper())
-
-    query = await db.execute(stmt)
-    results = query.all()
-    print(f"🔍 Total results from DB (joined): {len(results)}")
-
-    ranked_series = []
-    for series, detail in results:
-        def safe_avg(total, count):
-            return total / count if count else 0
-
-        if detail:
-            story = safe_avg(detail.story_total, detail.story_count)
-            chars = safe_avg(detail.characters_total, detail.characters_count)
-            world = safe_avg(detail.worldbuilding_total, detail.worldbuilding_count)
-            art = safe_avg(detail.art_total, detail.art_count)
-            drama = safe_avg(detail.drama_or_fight_total, detail.drama_or_fight_count)
-            # final_score = round((story + chars + world + art + drama) / 5, 2)
-            final_score = Decimal((story + chars + world + art + drama) / 5)
-            # print(f"final_socre: {final_score}")
-        else:
-            final_score = 0.0
-
-        ranked_series.append({
+    full = [
+        {
             "id": series.id,
             "title": series.title,
             "genre": series.genre,
@@ -346,31 +338,44 @@ async def get_ranked_series(
             "artist": series.artist,
             "cover_url": series.cover_url,
             "vote_count": series.vote_count or 0,
-            "final_score": final_score,
+            "final_score": compute_final_score(detail),
             "status": series.status.name if series.status else None,
-        })
+        }
+        for series, detail in rows
+    ]
 
-    # Rank is ALWAYS score-based — the "ranking" is by final_score. Compute it
-    # first so every item carries its true rank regardless of display order.
-    ranked = [s for s in ranked_series if s["final_score"] > 0]
-    unranked = [s for s in ranked_series if s["final_score"] == 0]
-
+    # Rank over the full type-scoped set (genre/status excluded from ranking).
+    ranked = [s for s in full if s["final_score"] > 0]
     ranked.sort(key=lambda x: x["final_score"], reverse=True)
     for idx, s in enumerate(ranked):
         s["rank"] = idx + 1
-    for s in unranked:
-        s["rank"] = None
+    for s in full:
+        if s["final_score"] == 0:
+            s["rank"] = None
 
-    # `sort` controls the DISPLAY order only; each item keeps its score-based rank.
+    # Apply genre/status as display-only filters; kept items retain their rank.
+    genre_needle = genre.lower() if genre else None
+    status_needle = status.upper() if status else None
+
+    def passes_filters(s) -> bool:
+        if genre_needle and genre_needle not in (s["genre"] or "").lower():
+            return False
+        if status_needle and (s["status"] or "") != status_needle:
+            return False
+        return True
+
+    visible = [s for s in full if passes_filters(s)]
+
+    # `sort` controls DISPLAY order only; each item keeps its score-based rank.
     sort_key = (sort or "score").lower()
     if sort_key == "votes":
-        ordered = sorted(ranked_series, key=lambda x: x["vote_count"], reverse=True)
+        ordered = sorted(visible, key=lambda x: x["vote_count"], reverse=True)
     elif sort_key == "newest":
-        ordered = sorted(ranked_series, key=lambda x: x["id"], reverse=True)
+        ordered = sorted(visible, key=lambda x: x["id"], reverse=True)
     elif sort_key == "title":
-        ordered = sorted(ranked_series, key=lambda x: (x["title"] or "").casefold())
-    else:  # "score" (default): ranked by score desc, unranked last
-        ordered = ranked + unranked
+        ordered = sorted(visible, key=lambda x: (x["title"] or "").casefold())
+    else:  # "score" (default): ranked by rank ascending, unranked last
+        ordered = sorted(visible, key=lambda x: (x["rank"] is None, x["rank"] or 0))
 
     start = (page - 1) * page_size
     end = start + page_size
