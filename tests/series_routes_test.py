@@ -383,3 +383,53 @@ def test_rankings_sort_by_title_orders_alphabetically():
     assert response.status_code == 200
     data = response.json()
     assert [d["title"] for d in data] == ["Alpha", "Mango", "Zebra"]
+
+
+# ── /series/rankings: genre/status are display filters, they don't reset rank ──
+
+
+def test_rankings_genre_filter_preserves_global_rank():
+    # Global ranks by score: Top=9 (#1), Mid=8 (#2), Low=7 (#3)
+    rows = [
+        (make_series(id=1, title="Top", genre="Action"), make_detail(9)),
+        (make_series(id=2, title="Mid", genre="Romance"), make_detail(8)),
+        (make_series(id=3, title="Low", genre="Action"), make_detail(7)),
+    ]
+    session = FakeRankingsSession(rows)
+    cleanup = override_rankings_db(session)
+    try:
+        response = client.get("/series/rankings?genre=Action")
+    finally:
+        cleanup()
+
+    assert response.status_code == 200
+    data = response.json()
+    # Only Action titles show, but each keeps its GLOBAL rank (1 and 3, not 1 and 2).
+    assert {d["title"]: d["rank"] for d in data} == {"Top": 1, "Low": 3}
+
+
+def test_rankings_status_filter_preserves_global_rank():
+    rows = [
+        (
+            make_series(id=1, title="Top", genre="Action", status=SeriesStatus.ONGOING),
+            make_detail(9),
+        ),
+        (
+            make_series(id=2, title="Mid", genre="Action", status=SeriesStatus.COMPLETE),
+            make_detail(8),
+        ),
+        (
+            make_series(id=3, title="Low", genre="Action", status=SeriesStatus.ONGOING),
+            make_detail(7),
+        ),
+    ]
+    session = FakeRankingsSession(rows)
+    cleanup = override_rankings_db(session)
+    try:
+        response = client.get("/series/rankings?status=ONGOING")
+    finally:
+        cleanup()
+
+    assert response.status_code == 200
+    data = response.json()
+    assert {d["title"]: d["rank"] for d in data} == {"Top": 1, "Low": 3}
