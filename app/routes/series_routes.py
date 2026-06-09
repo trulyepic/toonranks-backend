@@ -297,6 +297,10 @@ async def get_ranked_series(
     type: Optional[str] = Query(None),
     genre: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
+    sort: Optional[str] = Query(
+        "score",
+        description="Display order: score (default) | votes | newest | title",
+    ),
     db: AsyncSession = Depends(get_db)
 ):
     stmt = select(Series, SeriesDetail).join(
@@ -346,26 +350,31 @@ async def get_ranked_series(
             "status": series.status.name if series.status else None,
         })
 
-    # Split and sort
+    # Rank is ALWAYS score-based — the "ranking" is by final_score. Compute it
+    # first so every item carries its true rank regardless of display order.
     ranked = [s for s in ranked_series if s["final_score"] > 0]
     unranked = [s for s in ranked_series if s["final_score"] == 0]
 
-    print(f"🏆 Ranked series: {len(ranked)}")
-    print(f"❌ Unranked series: {len(unranked)}")
-
     ranked.sort(key=lambda x: x["final_score"], reverse=True)
-
     for idx, s in enumerate(ranked):
         s["rank"] = idx + 1
     for s in unranked:
         s["rank"] = None
 
-    final_output = ranked + unranked
+    # `sort` controls the DISPLAY order only; each item keeps its score-based rank.
+    sort_key = (sort or "score").lower()
+    if sort_key == "votes":
+        ordered = sorted(ranked_series, key=lambda x: x["vote_count"], reverse=True)
+    elif sort_key == "newest":
+        ordered = sorted(ranked_series, key=lambda x: x["id"], reverse=True)
+    elif sort_key == "title":
+        ordered = sorted(ranked_series, key=lambda x: (x["title"] or "").casefold())
+    else:  # "score" (default): ranked by score desc, unranked last
+        ordered = ranked + unranked
 
     start = (page - 1) * page_size
     end = start + page_size
-    print(f"📦 Returning {len(final_output[start:end])} items for page {page} (range {start}:{end})")
-    return final_output[start:end]
+    return ordered[start:end]
 
 
 
