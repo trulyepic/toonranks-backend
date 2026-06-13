@@ -41,7 +41,10 @@ def test_build_verification_email_includes_plain_text_and_html_parts(monkeypatch
     assert "If you have questions, contact support@toonranks.com." in body
     assert "reply to this email" not in body.lower()
     assert "reply here" not in html.lower()
-    assert "TOON RANKS" in html
+    # Header wordmark is split into two spans so "TOON" can use the brand blue
+    # (matching the site logo); assert both parts are present.
+    assert ">TOON</span>" in html
+    assert ">RANKS</span>" in html
     assert "Confirm your Toon Ranks email" in html
     assert "Confirm email" in html
     assert "saved series, category ratings, and forum discussions" in html
