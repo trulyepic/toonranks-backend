@@ -92,8 +92,8 @@ The Toon Ranks team
                           <td style="vertical-align:middle;">
                             <img src="{escaped_logo_url}" width="42" height="42" alt="" style="display:block;border-radius:12px;border:0;">
                           </td>
-                          <td style="vertical-align:middle;padding-left:12px;font-size:13px;line-height:18px;font-weight:800;letter-spacing:2.8px;color:#182235;">
-                            TOON RANKS
+                          <td style="vertical-align:middle;padding-left:12px;font-size:13px;line-height:18px;font-weight:800;letter-spacing:2.8px;">
+                            <span style="color:#2563eb;">TOON</span> <span style="color:#182235;">RANKS</span>
                           </td>
                         </tr>
                       </table>
@@ -230,8 +230,8 @@ The Toon Ranks team
                           <td style="vertical-align:middle;">
                             <img src="{escaped_logo_url}" width="42" height="42" alt="" style="display:block;border-radius:12px;border:0;">
                           </td>
-                          <td style="vertical-align:middle;padding-left:12px;font-size:13px;line-height:18px;font-weight:800;letter-spacing:2.8px;color:#182235;">
-                            TOON RANKS
+                          <td style="vertical-align:middle;padding-left:12px;font-size:13px;line-height:18px;font-weight:800;letter-spacing:2.8px;">
+                            <span style="color:#2563eb;">TOON</span> <span style="color:#182235;">RANKS</span>
                           </td>
                         </tr>
                       </table>
