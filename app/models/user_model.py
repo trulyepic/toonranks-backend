@@ -21,5 +21,14 @@ class User(Base):
     registered_at = Column(DateTime(timezone=True), nullable=True)
     cred_score = Column(Integer, nullable=False, server_default="0", default=0)
 
+    # Public-profile visibility toggles. Default ON: rated series and forum
+    # posts show on the user's public profile unless they opt out in settings.
+    public_ratings = Column(
+        Boolean, nullable=False, server_default="true", default=True
+    )
+    public_posts = Column(
+        Boolean, nullable=False, server_default="true", default=True
+    )
+
     reading_lists = relationship("ReadingList", cascade="all, delete-orphan", backref="owner")
 

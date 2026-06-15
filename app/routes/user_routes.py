@@ -13,10 +13,24 @@ from app.models.user_model import User
 from app.models.user_favourite import UserFavourite
 from app.models.series_model import Series
 from app.models.reading_list import ReadingList, ReadingListItem
-from app.models.forum_model import ForumPost
+from app.models.forum_model import ForumPost, ForumThread
 from app.models.user_vote import UserVote
 
 router = APIRouter(prefix="/users", tags=["users"])
+
+# Caps for the public profile lists so the payload stays small. The owner's own
+# Account page (paginated endpoints) remains the place to browse everything.
+PUBLIC_RATINGS_LIMIT = 30
+PUBLIC_POSTS_LIMIT = 20
+POST_EXCERPT_CHARS = 200
+
+
+def _excerpt(markdown: str) -> str:
+    """A short, plain-ish preview of a forum post for the public profile."""
+    text = " ".join((markdown or "").split())
+    if len(text) <= POST_EXCERPT_CHARS:
+        return text
+    return text[:POST_EXCERPT_CHARS].rstrip() + "…"
 
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
@@ -39,6 +53,26 @@ class PublicReadingListOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class PublicSeriesRatingOut(BaseModel):
+    series_id: int
+    title: Optional[str]
+    cover_url: Optional[str]
+    type: Optional[str]
+    score: float  # the user's own average across the categories they scored
+
+    model_config = {"from_attributes": True}
+
+
+class PublicForumPostOut(BaseModel):
+    post_id: int
+    thread_id: int
+    thread_title: Optional[str]
+    excerpt: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class PublicProfileOut(BaseModel):
     username: str
     role: str
@@ -50,6 +84,9 @@ class PublicProfileOut(BaseModel):
     post_count: int
     favourites: List[PublicFavouriteOut]
     reading_lists: List[PublicReadingListOut]
+    # None when the user has hidden that section (vs [] meaning "public but empty").
+    ratings: Optional[List[PublicSeriesRatingOut]] = None
+    posts: Optional[List[PublicForumPostOut]] = None
 
     model_config = {"from_attributes": True}
 
@@ -257,6 +294,59 @@ async def get_public_profile(
         for rl, item_count in rl_rows
     ]
 
+    # ── Rated series (only if the user keeps ratings public) ───────────────
+    # One row per series the user has voted on, with their own average score
+    # across the categories they scored. Capped to the most recent set.
+    ratings: Optional[List[PublicSeriesRatingOut]] = None
+    if user.public_ratings:
+        rating_stmt = (
+            select(
+                UserVote.series_id,
+                func.avg(UserVote.score).label("avg_score"),
+                Series.title,
+                Series.cover_url,
+                Series.type,
+            )
+            .join(Series, Series.id == UserVote.series_id)
+            .where(UserVote.user_id == user.id)
+            .group_by(UserVote.series_id, Series.title, Series.cover_url, Series.type)
+            .order_by(UserVote.series_id.desc())
+            .limit(PUBLIC_RATINGS_LIMIT)
+        )
+        rating_rows = (await db.execute(rating_stmt)).all()
+        ratings = [
+            PublicSeriesRatingOut(
+                series_id=series_id,
+                title=title,
+                cover_url=cover_url,
+                type=stype.value if stype else None,
+                score=round(float(avg_score), 1),
+            )
+            for series_id, avg_score, title, cover_url, stype in rating_rows
+        ]
+
+    # ── Forum posts (only if the user keeps posts public) ──────────────────
+    posts: Optional[List[PublicForumPostOut]] = None
+    if user.public_posts:
+        post_stmt = (
+            select(ForumPost, ForumThread.title)
+            .join(ForumThread, ForumThread.id == ForumPost.thread_id)
+            .where(ForumPost.author_id == user.id)
+            .order_by(ForumPost.created_at.desc())
+            .limit(PUBLIC_POSTS_LIMIT)
+        )
+        post_rows = (await db.execute(post_stmt)).all()
+        posts = [
+            PublicForumPostOut(
+                post_id=post.id,
+                thread_id=post.thread_id,
+                thread_title=thread_title,
+                excerpt=_excerpt(post.content_markdown),
+                created_at=post.created_at,
+            )
+            for post, thread_title in post_rows
+        ]
+
     return PublicProfileOut(
         username=user.username,
         role=user.role or "GENERAL",
@@ -268,4 +358,6 @@ async def get_public_profile(
         post_count=post_count,
         favourites=favourites,
         reading_lists=reading_lists,
+        ratings=ratings,
+        posts=posts,
     )

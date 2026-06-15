@@ -239,6 +239,8 @@ def test_login_returns_access_token_for_verified_user(monkeypatch):
             "role": "GENERAL",
             "avatar_url": None,
             "avatar_preset": "blue",
+            "public_ratings": True,
+            "public_posts": True,
         },
     }
 
@@ -508,6 +510,33 @@ def test_create_mobile_auth_code_rejects_unknown_redirect_uri():
     assert session.committed is False
 
 
+def test_update_my_privacy_toggles_only_provided_flag():
+    db_user = SimpleNamespace(
+        id=7,
+        username="reader",
+        role="GENERAL",
+        public_ratings=True,
+        public_posts=True,
+    )
+    current_user = SimpleNamespace(id=7, username="reader", role="GENERAL")
+    session = FakeAuthSession(get_result=db_user)
+    cleanup_db = override_auth_db(session)
+    cleanup_user = override_auth_user(current_user)
+
+    try:
+        response = client.patch("/auth/me/privacy", json={"public_posts": False})
+    finally:
+        cleanup_user()
+        cleanup_db()
+
+    assert response.status_code == 200
+    # Only public_posts was sent, so public_ratings is left untouched.
+    assert response.json() == {"public_ratings": True, "public_posts": False}
+    assert db_user.public_ratings is True
+    assert db_user.public_posts is False
+    assert session.committed is True
+
+
 def test_exchange_mobile_auth_code_returns_tokens_and_marks_code_used(monkeypatch):
     auth_code = SimpleNamespace(
         user_id=7,
@@ -545,6 +574,8 @@ def test_exchange_mobile_auth_code_returns_tokens_and_marks_code_used(monkeypatc
             "role": "CONTRIBUTOR",
             "avatar_url": "https://cdn.example.com/avatar.webp",
             "avatar_preset": "emerald",
+            "public_ratings": True,
+            "public_posts": True,
         },
     }
     assert body["refresh_token"]
@@ -600,6 +631,8 @@ def test_refresh_mobile_access_token_returns_new_access_token(monkeypatch):
             "role": "GENERAL",
             "avatar_url": None,
             "avatar_preset": "blue",
+            "public_ratings": True,
+            "public_posts": True,
         },
     }
     assert refresh_record.last_used_at is not None
