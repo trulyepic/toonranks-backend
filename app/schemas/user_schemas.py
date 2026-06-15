@@ -94,3 +94,16 @@ class UsernameUpdateOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class PrivacySettingsUpdate(BaseModel):
+    # Both optional so a client can update one toggle without touching the other.
+    public_ratings: Optional[bool] = None
+    public_posts: Optional[bool] = None
+
+
+class PrivacySettingsOut(BaseModel):
+    public_ratings: bool
+    public_posts: bool
+
+    model_config = {"from_attributes": True}
+
+

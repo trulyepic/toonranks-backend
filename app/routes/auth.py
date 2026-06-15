@@ -20,6 +20,8 @@ from app.schemas.user_schemas import (
     UserRoleUpdate,
     UsernameUpdateRequest,
     UsernameUpdateOut,
+    PrivacySettingsUpdate,
+    PrivacySettingsOut,
 )
 from sqlalchemy.future import select
 from passlib.hash import bcrypt
@@ -98,6 +100,8 @@ def user_to_dict(user: User) -> dict:
         "role": user.role,
         "avatar_url": getattr(user, "avatar_url", None),
         "avatar_preset": getattr(user, "avatar_preset", None) or DEFAULT_AVATAR_PRESET,
+        "public_ratings": getattr(user, "public_ratings", True),
+        "public_posts": getattr(user, "public_posts", True),
     }
 
 
@@ -790,6 +794,32 @@ async def update_my_username(
     # own session and is not persistent in db, so we must re-fetch it here.
     user = await get_user_for_update(current_user, db)
     user.username = new_username
+    await db.commit()
+    await db.refresh(user)
+
+    return user
+
+
+@router.patch("/me/privacy", response_model=PrivacySettingsOut)
+@limiter.limit("20/hour")
+async def update_my_privacy(
+    request: Request,
+    payload: PrivacySettingsUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Update the authenticated user's public-profile visibility toggles.
+    Controls whether the user's rated series and forum posts appear on their
+    public profile. Either field may be omitted to leave it unchanged.
+    """
+    user = await get_user_for_update(current_user, db)
+
+    if payload.public_ratings is not None:
+        user.public_ratings = payload.public_ratings
+    if payload.public_posts is not None:
+        user.public_posts = payload.public_posts
+
     await db.commit()
     await db.refresh(user)
 

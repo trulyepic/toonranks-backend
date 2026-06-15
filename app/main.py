@@ -170,6 +170,24 @@ async def on_startup():
                     text(
                         """
                         ALTER TABLE IF EXISTS man_review.users
+                        ADD COLUMN IF NOT EXISTS public_ratings BOOLEAN
+                        NOT NULL DEFAULT TRUE
+                        """
+                    )
+                )
+                await conn.execute(
+                    text(
+                        """
+                        ALTER TABLE IF EXISTS man_review.users
+                        ADD COLUMN IF NOT EXISTS public_posts BOOLEAN
+                        NOT NULL DEFAULT TRUE
+                        """
+                    )
+                )
+                await conn.execute(
+                    text(
+                        """
+                        ALTER TABLE IF EXISTS man_review.users
                         ADD COLUMN IF NOT EXISTS auth_provider VARCHAR(10)
                         NOT NULL DEFAULT 'email'
                         """
