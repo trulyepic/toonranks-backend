@@ -109,7 +109,7 @@ async def update_series(
     type: Optional[SeriesType] = Form(None),
     author: Optional[str] = Form(None),
     artist: Optional[str] = Form(None),
-    status: Optional[SeriesStatus] = Form(None),
+    status: Optional[str] = Form(None),
     cover: Optional[UploadFile] = File(None),
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_async_session)
@@ -131,13 +131,20 @@ async def update_series(
             detail="You cannot edit this title"
         )
 
+    if status == "":
+        series.status = None
+    elif status is not None:
+        try:
+            series.status = SeriesStatus(status)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="Invalid series status")
+
     payload = {
         "title": title,
         "genre": genre,
         "type": type,
         "author": author,
         "artist": artist,
-        "status": status,
     }
 
     for field, value in payload.items():
