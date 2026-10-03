@@ -324,6 +324,12 @@ async def get_series_detail(
     response_data["cover_url"] = series.cover_url
     response_data["approval_status"] = series.approval_status
     response_data["submitted_by_id"] = series.submitted_by_id
+    response_data["external_source"] = series.external_source
+    response_data["external_id"] = series.external_id
+    response_data["external_url"] = series.external_url
+    response_data["external_score"] = series.external_score
+    response_data["external_popularity"] = series.external_popularity
+    response_data["external_synced_at"] = series.external_synced_at
 
     return JSONResponse(content=response_data)
 
@@ -397,6 +403,5 @@ async def get_series_detail(
 #     response_data["artist"] = series.artist
 #
 #     return JSONResponse(content=response_data)
-
 
 

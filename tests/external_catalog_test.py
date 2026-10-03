@@ -10,7 +10,12 @@ from app.routes.external_catalog_routes import (
     import_external_batch,
     import_external_title,
 )
-from app.utils.external_catalog import ExternalTitleCandidate, normalize_anilist_media
+from app.utils.external_catalog import (
+    ExternalTitleCandidate,
+    normalize_anilist_media,
+    requires_primary_title_match,
+    titles_match_exactly,
+)
 
 
 def test_normalize_anilist_media_maps_country_to_toonranks_type():
@@ -47,9 +52,41 @@ def test_normalize_anilist_media_maps_country_to_toonranks_type():
     assert candidate.artist == "Artist"
 
 
+def test_exact_title_match_accepts_aliases_and_parenthetical_titles():
+    assert titles_match_exactly("That Time I Got Reincarnated as a Slime", "Tensei Shitara Slime Datta Ken (That Time I Got Reincarnated as a Slime)")
+    assert titles_match_exactly("Attack on Titan", "Shingeki no Kyojin / Attack on Titan")
+
+
+def test_exact_title_match_rejects_related_but_different_titles():
+    assert not titles_match_exactly("Jigokuraku Bangai-hen", "Hell's Paradise: Jigokuraku")
+    assert not titles_match_exactly("Life with an Ordinary Guy Who Reincarnated into a Total Fantasy Knockout", "Isekai Ojisan")
+
+
+def test_short_titles_require_primary_title_match_for_enrichment():
+    assert requires_primary_title_match("Real")
+    assert not requires_primary_title_match("The Legend of the Northern Blade")
+
+
+class FakeScalarResult:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def all(self):
+        return self._rows
+
+
+class FakeExecuteResult:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def scalars(self):
+        return FakeScalarResult(self._rows)
+
+
 class FakeImportSession:
-    def __init__(self, *, scalars=None):
+    def __init__(self, *, scalars=None, execute_rows=None):
         self._scalars = list(scalars or [])
+        self._execute_rows = list(execute_rows or [])
         self.added = []
         self.committed = False
         self.rolled_back = False
@@ -59,6 +96,11 @@ class FakeImportSession:
         if self._scalars:
             return self._scalars.pop(0)
         return None
+
+    async def execute(self, _stmt):
+        if self._execute_rows:
+            return FakeExecuteResult(self._execute_rows.pop(0))
+        return FakeExecuteResult([])
 
     def add(self, item):
         self.added.append(item)
@@ -99,7 +141,7 @@ def import_payload(**overrides):
 
 @pytest.mark.anyio
 async def test_import_external_title_creates_pending_review_title():
-    session = FakeImportSession()
+    session = FakeImportSession(scalars=[None], execute_rows=[[]])
     admin = SimpleNamespace(id=7, username="admin")
 
     result = await import_external_title(import_payload(), admin_user=admin, session=session)
@@ -141,10 +183,117 @@ async def test_import_external_title_returns_existing_duplicate():
         external_id="151807",
         external_url="https://anilist.co/manga/151807",
     )
-    session = FakeImportSession(scalars=[existing, None])
+    session = FakeImportSession(scalars=[existing])
     admin = SimpleNamespace(id=7, username="admin")
 
     result = await import_external_title(import_payload(), admin_user=admin, session=session)
+
+    assert result.imported is False
+    assert result.duplicate is True
+    assert result.series.id == existing.id
+    assert session.added == []
+    assert session.committed is False
+
+
+@pytest.mark.anyio
+async def test_import_external_title_matches_existing_title_without_source():
+    existing = SimpleNamespace(
+        id=9,
+        title="Imported Title",
+        genre="Action",
+        type="MANHWA",
+        author="Writer",
+        artist="Artist",
+        status=SeriesStatus.ONGOING,
+        vote_count=12,
+        cover_url="https://img.example.com/existing.jpg",
+        approval_status=SeriesApprovalStatus.APPROVED.value,
+        submitted_by_id=None,
+        approved_by_id=1,
+        approved_at="2026-01-01T00:00:00+00:00",
+        external_source=None,
+        external_id=None,
+        external_url=None,
+    )
+    session = FakeImportSession(scalars=[None], execute_rows=[[existing]])
+    admin = SimpleNamespace(id=7, username="admin")
+
+    result = await import_external_title(import_payload(title=" imported title "), admin_user=admin, session=session)
+
+    assert result.imported is False
+    assert result.duplicate is True
+    assert result.series.id == existing.id
+    assert session.added == []
+    assert session.committed is False
+
+
+@pytest.mark.anyio
+async def test_import_external_title_matches_existing_alias_title_without_source():
+    existing = SimpleNamespace(
+        id=58,
+        title="Mercenary Enrollment",
+        genre="Action",
+        type="MANHWA",
+        author="Writer",
+        artist="Artist",
+        status=SeriesStatus.ONGOING,
+        vote_count=12,
+        cover_url="https://img.example.com/existing.jpg",
+        approval_status=SeriesApprovalStatus.APPROVED.value,
+        submitted_by_id=None,
+        approved_by_id=1,
+        approved_at="2026-01-01T00:00:00+00:00",
+        external_source=None,
+        external_id=None,
+        external_url=None,
+    )
+    session = FakeImportSession(scalars=[None], execute_rows=[[existing]])
+    admin = SimpleNamespace(id=7, username="admin")
+
+    result = await import_external_title(
+        import_payload(
+            title="Teenage Mercenary",
+            title_aliases=["Teenage Mercenary", "Mercenary Enrollment"],
+        ),
+        admin_user=admin,
+        session=session,
+    )
+
+    assert result.imported is False
+    assert result.duplicate is True
+    assert result.series.id == existing.id
+    assert session.added == []
+    assert session.committed is False
+
+
+@pytest.mark.anyio
+async def test_import_external_title_matches_existing_similar_title_without_source():
+    existing = SimpleNamespace(
+        id=125,
+        title="Omniscient Reader’s Viewpoint",
+        genre="Action",
+        type="MANHWA",
+        author="Writer",
+        artist="Artist",
+        status=SeriesStatus.ONGOING,
+        vote_count=12,
+        cover_url="https://img.example.com/existing.jpg",
+        approval_status=SeriesApprovalStatus.APPROVED.value,
+        submitted_by_id=None,
+        approved_by_id=1,
+        approved_at="2026-01-01T00:00:00+00:00",
+        external_source=None,
+        external_id=None,
+        external_url=None,
+    )
+    session = FakeImportSession(scalars=[None], execute_rows=[[existing]])
+    admin = SimpleNamespace(id=7, username="admin")
+
+    result = await import_external_title(
+        import_payload(title="Omniscient Reader"),
+        admin_user=admin,
+        session=session,
+    )
 
     assert result.imported is False
     assert result.duplicate is True
@@ -203,7 +352,7 @@ async def test_batch_import_creates_only_new_pending_titles(monkeypatch):
         ]
 
     monkeypatch.setattr(external_catalog_routes, "discover_anilist_titles", fake_discover)
-    session = FakeImportSession(scalars=[None, existing, None])
+    session = FakeImportSession(scalars=[None, existing], execute_rows=[[]])
     admin = SimpleNamespace(id=7, username="admin")
 
     result = await import_external_batch(
@@ -253,7 +402,7 @@ async def test_batch_import_rolls_back_when_every_candidate_is_duplicate(monkeyp
         return [candidate(external_id="202", title="Existing Title")]
 
     monkeypatch.setattr(external_catalog_routes, "discover_anilist_titles", fake_discover)
-    session = FakeImportSession(scalars=[existing, None])
+    session = FakeImportSession(scalars=[existing])
     admin = SimpleNamespace(id=7, username="admin")
 
     result = await import_external_batch(

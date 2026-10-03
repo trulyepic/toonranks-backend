@@ -144,5 +144,8 @@ def test_list_series_returns_approved_public_series():
             "external_source": None,
             "external_id": None,
             "external_url": None,
+            "external_score": None,
+            "external_popularity": None,
+            "external_synced_at": None,
         }
     ]

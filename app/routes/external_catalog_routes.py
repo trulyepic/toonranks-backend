@@ -14,8 +14,10 @@ from app.schemas.series_schemas import PendingSeriesOut, SeriesStatusEnum, Serie
 from app.utils.external_catalog import (
     AniListSort,
     ExternalTitleCandidate,
+    candidate_title_values,
     discover_anilist_titles,
     search_anilist_titles,
+    titles_match,
 )
 
 router = APIRouter(prefix="/external-catalog", tags=["external-catalog"])
@@ -36,6 +38,9 @@ class ExternalImportRequest(BaseModel):
     author: str = Field(default="", max_length=300)
     artist: str = Field(default="", max_length=300)
     status: Optional[SeriesStatusEnum] = None
+    title_aliases: list[str] = Field(default_factory=list)
+    popularity: Optional[int] = None
+    average_score: Optional[int] = None
 
 
 class ExternalImportResponse(BaseModel):
@@ -84,18 +89,46 @@ def _pending_series_payload(series: Series, *, username: str, detail_ready: bool
     }
 
 
+def _candidate_titles(payload: "ExternalImportRequest") -> list[str]:
+    return candidate_title_values(
+        ExternalTitleCandidate(
+            source=payload.source,
+            external_id=payload.external_id,
+            external_url=payload.external_url,
+            title=payload.title,
+            type=payload.type,
+            genre=payload.genre,
+            title_aliases=payload.title_aliases,
+        )
+    )
+
+
 async def _find_existing(
     session: AsyncSession,
     *,
     source: str,
     external_id: str,
+    payload: "ExternalImportRequest",
+    series_type: str,
 ) -> Optional[Series]:
-    return await session.scalar(
+    existing_by_source = await session.scalar(
         select(Series).where(
             Series.external_source == source,
             Series.external_id == external_id,
         )
     )
+    if existing_by_source:
+        return existing_by_source
+
+    existing_rows = (
+        await session.execute(select(Series).where(Series.type == series_type))
+    ).scalars().all()
+    candidate_titles = _candidate_titles(payload)
+    for existing in existing_rows:
+        if any(titles_match(candidate_title, existing.title) for candidate_title in candidate_titles):
+            return existing
+
+    return None
 
 
 async def _detail_ready(session: AsyncSession, series_id: int) -> bool:
@@ -127,6 +160,8 @@ async def _create_pending_import(
         external_source=payload.source.upper(),
         external_id=payload.external_id.strip(),
         external_url=payload.external_url.strip(),
+        external_score=payload.average_score,
+        external_popularity=payload.popularity,
         approval_status=SeriesApprovalStatus.PENDING.value,
         submitted_by_id=admin_user.id,
     )
@@ -201,7 +236,13 @@ async def import_external_title(
     source = payload.source.upper()
     external_id = payload.external_id.strip()
 
-    existing = await _find_existing(session, source=source, external_id=external_id)
+    existing = await _find_existing(
+        session,
+        source=source,
+        external_id=external_id,
+        payload=payload,
+        series_type=payload.type,
+    )
     if existing:
         return ExternalImportResponse(
             imported=False,
@@ -266,6 +307,8 @@ async def import_external_batch(
             session,
             source=import_payload.source.upper(),
             external_id=import_payload.external_id.strip(),
+            payload=import_payload,
+            series_type=import_payload.type,
         )
         if existing:
             duplicates += 1
