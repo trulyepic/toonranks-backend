@@ -1,8 +1,9 @@
 import re
+from difflib import SequenceMatcher
 from typing import Any, Literal, Optional
 
 import httpx
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.series_schemas import SeriesStatusEnum, SeriesTypeEnum
 
@@ -36,6 +37,7 @@ class ExternalTitleCandidate(BaseModel):
     country_of_origin: Optional[str] = None
     popularity: Optional[int] = None
     average_score: Optional[int] = None
+    title_aliases: list[str] = Field(default_factory=list)
 
 
 _ANILIST_SEARCH_QUERY = """
@@ -50,6 +52,7 @@ query ($search: String!, $page: Int!, $perPage: Int!) {
         romaji
         native
       }
+      synonyms
       status
       description(asHtml: false)
       countryOfOrigin
@@ -99,6 +102,7 @@ query (
         romaji
         native
       }
+      synonyms
       status
       description(asHtml: false)
       countryOfOrigin
@@ -143,6 +147,104 @@ def _title(media: dict[str, Any]) -> str:
         or (title.get("native") or "").strip()
         or f"AniList #{media.get('id')}"
     )
+
+
+def _title_aliases(media: dict[str, Any]) -> list[str]:
+    title = media.get("title") or {}
+    aliases: list[str] = []
+    for value in [
+        title.get("english"),
+        title.get("romaji"),
+        title.get("native"),
+        *(media.get("synonyms") or []),
+    ]:
+        alias = str(value or "").strip()
+        if alias and alias not in aliases:
+            aliases.append(alias)
+    return aliases
+
+
+def normalize_title_for_match(value: str) -> str:
+    normalized = (
+        value.casefold()
+        .replace("’", "'")
+        .replace("`", "'")
+        .replace("&", " and ")
+    )
+    normalized = re.sub(r"\([^)]*\)|\[[^]]*\]", " ", normalized)
+    normalized = re.sub(r"[^a-z0-9]+", " ", normalized)
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def exact_title_values_for_match(value: str) -> set[str]:
+    values = {normalize_title_for_match(value)}
+    for grouped_value in re.findall(r"\(([^)]*)\)|\[([^]]*)\]", value):
+        grouped_text = next((part for part in grouped_value if part), "")
+        values.add(normalize_title_for_match(grouped_text))
+    for separator in ["/", "|"]:
+        for part in value.split(separator):
+            values.add(normalize_title_for_match(part))
+    return {title for title in values if title}
+
+
+def title_tokens_for_match(value: str) -> set[str]:
+    stop_words = {"a", "an", "and", "of", "or", "the", "to"}
+    return {
+        token
+        for token in normalize_title_for_match(value).split()
+        if token and token not in stop_words
+    }
+
+
+def titles_match(candidate_title: str, existing_title: str) -> bool:
+    candidate = normalize_title_for_match(candidate_title)
+    existing = normalize_title_for_match(existing_title)
+    if not candidate or not existing:
+        return False
+    if candidate == existing:
+        return True
+
+    shorter, longer = sorted([candidate, existing], key=len)
+    if len(shorter) >= 10 and longer.startswith(f"{shorter} "):
+        return True
+
+    candidate_tokens = title_tokens_for_match(candidate)
+    existing_tokens = title_tokens_for_match(existing)
+    if candidate_tokens and existing_tokens:
+        overlap = candidate_tokens & existing_tokens
+        smaller_size = min(len(candidate_tokens), len(existing_tokens))
+        if smaller_size >= 2 and len(overlap) / smaller_size >= 0.75:
+            return True
+
+    compact_candidate = candidate.replace(" ", "")
+    compact_existing = existing.replace(" ", "")
+    if min(len(compact_candidate), len(compact_existing)) >= 12:
+        return SequenceMatcher(None, compact_candidate, compact_existing).ratio() >= 0.88
+
+    return False
+
+
+def titles_match_exactly(candidate_title: str, existing_title: str) -> bool:
+    candidate_titles = exact_title_values_for_match(candidate_title)
+    existing_titles = exact_title_values_for_match(existing_title)
+    return bool(candidate_titles and existing_titles and candidate_titles & existing_titles)
+
+
+def requires_primary_title_match(value: str) -> bool:
+    normalized_values = exact_title_values_for_match(value)
+    return any(len(title.split()) <= 1 for title in normalized_values)
+
+
+def candidate_title_values(candidate: ExternalTitleCandidate) -> list[str]:
+    titles = [candidate.title, *candidate.title_aliases]
+    unique_titles: list[str] = []
+    seen: set[str] = set()
+    for title in titles:
+        normalized = normalize_title_for_match(title)
+        if normalized and normalized not in seen:
+            unique_titles.append(title)
+            seen.add(normalized)
+    return unique_titles
 
 
 def _type_from_country(country: Optional[str]) -> Optional[SeriesTypeEnum]:
@@ -216,6 +318,7 @@ def normalize_anilist_media(media: dict[str, Any]) -> Optional[ExternalTitleCand
         country_of_origin=media.get("countryOfOrigin"),
         popularity=media.get("popularity"),
         average_score=media.get("averageScore"),
+        title_aliases=_title_aliases(media),
     )
 
 
@@ -250,6 +353,34 @@ async def search_anilist_titles(
     if series_type:
         filtered = [candidate for candidate in filtered if candidate.type == series_type]
     return filtered
+
+
+async def find_anilist_match_for_title(
+    title: str,
+    series_type: SeriesTypeEnum,
+) -> Optional[ExternalTitleCandidate]:
+    title = title.strip()
+    if not title:
+        return None
+
+    candidates = await search_anilist_titles(
+        title,
+        page=1,
+        per_page=8,
+        series_type=series_type,
+    )
+    for candidate in candidates:
+        if requires_primary_title_match(title):
+            if titles_match_exactly(candidate.title, title):
+                return candidate
+            continue
+
+        if any(
+            titles_match_exactly(candidate_title, title)
+            for candidate_title in candidate_title_values(candidate)
+        ):
+            return candidate
+    return None
 
 
 async def discover_anilist_titles(

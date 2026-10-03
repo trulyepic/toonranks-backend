@@ -15,6 +15,8 @@ from app.s3 import upload_to_s3, delete_from_s3
 from urllib.parse import urlparse
 from fastapi import Query, HTTPException
 from app.deps.admin import require_admin, require_series_submitter, can_submit_series, is_admin
+from app.schemas.series_schemas import SeriesTypeEnum
+from app.utils.external_catalog import ExternalTitleCandidate, find_anilist_match_for_title
 from app.utils.token_utils import get_current_user
 from datetime import datetime, timezone
 
@@ -24,6 +26,63 @@ def extract_s3_key(cover_url: str) -> str:
     parsed = urlparse(cover_url)
     return parsed.path.lstrip("/")
 router = APIRouter()
+
+
+def _series_type_enum(value) -> Optional[SeriesTypeEnum]:
+    if not value:
+        return None
+    raw_value = value.value if hasattr(value, "value") else str(value)
+    try:
+        return SeriesTypeEnum(raw_value)
+    except ValueError:
+        return None
+
+
+def _apply_external_metadata(series: Series, candidate: ExternalTitleCandidate) -> None:
+    series.external_source = candidate.source
+    series.external_id = candidate.external_id
+    series.external_url = candidate.external_url
+    series.external_score = candidate.average_score
+    series.external_popularity = candidate.popularity
+    series.external_synced_at = datetime.now(timezone.utc).isoformat()
+
+
+def _clear_external_metadata(series: Series) -> None:
+    series.external_source = None
+    series.external_id = None
+    series.external_url = None
+    series.external_score = None
+    series.external_popularity = None
+    series.external_synced_at = None
+
+
+async def _external_metadata_in_use(
+    session: AsyncSession,
+    candidate: ExternalTitleCandidate,
+    current_series_id: Optional[int] = None,
+) -> bool:
+    stmt = select(Series.id).where(
+        Series.external_source == candidate.source,
+        Series.external_id == candidate.external_id,
+    )
+    if current_series_id is not None:
+        stmt = stmt.where(Series.id != current_series_id)
+    return await session.scalar(stmt) is not None
+
+
+async def _try_enrich_with_anilist(series: Series, session: AsyncSession) -> None:
+    series_type = _series_type_enum(series.type)
+    if not series_type:
+        return
+    try:
+        candidate = await find_anilist_match_for_title(series.title, series_type)
+    except Exception as exc:
+        print(f"Warning: AniList enrichment failed for {series.title!r}: {exc}")
+        return
+    if candidate:
+        if await _external_metadata_in_use(session, candidate, series.id):
+            return
+        _apply_external_metadata(series, candidate)
 
 async def get_db():
     async with AsyncSessionLocal() as session:
@@ -86,6 +145,7 @@ async def create_series(
         approved_by_id=None,
         approved_at=None,
     )
+    await _try_enrich_with_anilist(new_series, db)
 
     db.add(new_series)
     await db.commit()
@@ -139,6 +199,9 @@ async def update_series(
         except ValueError:
             raise HTTPException(status_code=422, detail="Invalid series status")
 
+    previous_title = series.title
+    previous_type = series.type
+
     payload = {
         "title": title,
         "genre": genre,
@@ -150,6 +213,16 @@ async def update_series(
     for field, value in payload.items():
         if value is not None:
             setattr(series, field, value)
+
+    external_match_inputs_changed = (
+        (title is not None and title != previous_title)
+        or (type is not None and type != previous_type)
+    )
+    if external_match_inputs_changed:
+        _clear_external_metadata(series)
+        await _try_enrich_with_anilist(series, session)
+    elif not series.external_source:
+        await _try_enrich_with_anilist(series, session)
 
     if cover is not None and cover.filename:
         if series.cover_url:

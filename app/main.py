@@ -160,6 +160,30 @@ async def on_startup():
                 await conn.execute(
                     text(
                         """
+                        ALTER TABLE IF EXISTS man_review.series
+                        ADD COLUMN IF NOT EXISTS external_score INTEGER
+                        """
+                    )
+                )
+                await conn.execute(
+                    text(
+                        """
+                        ALTER TABLE IF EXISTS man_review.series
+                        ADD COLUMN IF NOT EXISTS external_popularity INTEGER
+                        """
+                    )
+                )
+                await conn.execute(
+                    text(
+                        """
+                        ALTER TABLE IF EXISTS man_review.series
+                        ADD COLUMN IF NOT EXISTS external_synced_at VARCHAR(40)
+                        """
+                    )
+                )
+                await conn.execute(
+                    text(
+                        """
                         CREATE UNIQUE INDEX IF NOT EXISTS ux_series_external_source_id
                         ON man_review.series (external_source, external_id)
                         WHERE external_source IS NOT NULL AND external_id IS NOT NULL

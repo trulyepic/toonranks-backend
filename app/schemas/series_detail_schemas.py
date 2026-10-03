@@ -16,6 +16,12 @@ class SeriesDetailOut(BaseModel):
     cover_url: Optional[str] = None
     approval_status: Optional[str] = None
     submitted_by_id: Optional[int] = None
+    external_source: Optional[str] = None
+    external_id: Optional[str] = None
+    external_url: Optional[str] = None
+    external_score: Optional[int] = None
+    external_popularity: Optional[int] = None
+    external_synced_at: Optional[str] = None
 
     author: Optional[str] = None
     artist: Optional[str] = None

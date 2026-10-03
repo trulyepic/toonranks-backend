@@ -55,6 +55,9 @@ class SeriesOut(SeriesCreate):
     external_source: Optional[str] = None
     external_id: Optional[str] = None
     external_url: Optional[str] = None
+    external_score: Optional[int] = None
+    external_popularity: Optional[int] = None
+    external_synced_at: Optional[str] = None
 
     model_config = {
         "from_attributes": True
