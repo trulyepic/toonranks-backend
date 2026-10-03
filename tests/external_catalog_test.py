@@ -3,13 +3,14 @@ from types import SimpleNamespace
 import pytest
 
 from app.models.series_model import SeriesApprovalStatus, SeriesStatus
-from app.routes import external_catalog_routes
+from app.routes import external_catalog_routes, series_routes
 from app.routes.external_catalog_routes import (
     ExternalBatchImportRequest,
     ExternalImportRequest,
     import_external_batch,
     import_external_title,
 )
+from app.routes.series_routes import approve_series
 from app.utils.external_catalog import (
     ExternalTitleCandidate,
     normalize_anilist_media,
@@ -322,6 +323,74 @@ def candidate(**overrides):
     }
     values.update(overrides)
     return ExternalTitleCandidate(**values)
+
+
+class FakeApprovalResult:
+    def __init__(self, value):
+        self.value = value
+
+    def scalar_one_or_none(self):
+        return self.value
+
+
+class FakeApprovalSession:
+    def __init__(self, series, detail):
+        self.results = [FakeApprovalResult(series), FakeApprovalResult(detail)]
+        self.committed = False
+
+    async def execute(self, _stmt):
+        return self.results.pop(0)
+
+    async def scalar(self, _stmt):
+        return None
+
+    async def commit(self):
+        self.committed = True
+
+    async def refresh(self, _item):
+        return None
+
+
+@pytest.mark.anyio
+async def test_approval_refreshes_imported_anilist_metrics(monkeypatch):
+    series = SimpleNamespace(
+        id=42,
+        title="Sweet Home",
+        external_source="ANILIST",
+        external_id="100954",
+        external_url="https://anilist.co/manga/100954",
+        external_score=None,
+        external_popularity=None,
+        external_synced_at=None,
+        approval_status=SeriesApprovalStatus.PENDING.value,
+        approved_by_id=None,
+        approved_at=None,
+    )
+    detail = SimpleNamespace(synopsis="Synopsis", series_cover_url="https://img.example.com/banner.jpg")
+    session = FakeApprovalSession(series, detail)
+
+    async def fake_get_anilist_title(external_id):
+        assert external_id == "100954"
+        return candidate(
+            external_id="100954",
+            title="Sweet Home",
+            average_score=82,
+            popularity=123456,
+        )
+
+    monkeypatch.setattr(series_routes, "get_anilist_title", fake_get_anilist_title)
+
+    result = await approve_series(
+        series.id,
+        admin_user=SimpleNamespace(id=7),
+        db=session,
+    )
+
+    assert result.approval_status == SeriesApprovalStatus.APPROVED.value
+    assert result.external_score == 82
+    assert result.external_popularity == 123456
+    assert result.external_synced_at is not None
+    assert session.committed is True
 
 
 @pytest.mark.anyio
