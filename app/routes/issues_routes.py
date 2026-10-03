@@ -95,6 +95,7 @@ async def report_issue(
 @router.get("", response_model=List[IssueOut])
 async def list_issues(
     db: AsyncSession = Depends(get_db),
+    _admin=Depends(require_admin),
     q: Optional[str] = Query(None, description="Search in title/description"),
     type: Optional[str] = Query(None, description="BUG|FEATURE|CONTENT|OTHER"),
     status: Optional[str] = Query(None, description="OPEN|IN_PROGRESS|FIXED|WONT_FIX"),

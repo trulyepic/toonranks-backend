@@ -52,6 +52,9 @@ class SeriesOut(SeriesCreate):
     vote_count: int
     cover_url: str
     approval_status: Optional[str] = None
+    external_source: Optional[str] = None
+    external_id: Optional[str] = None
+    external_url: Optional[str] = None
 
     model_config = {
         "from_attributes": True

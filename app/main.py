@@ -6,7 +6,7 @@ import asyncio
 from sqlalchemy import text
 
 from app.routes import series_routes, auth, series_detail, reading_list_routes, issues_routes, forum_routes, \
-    forum_media_routes, favourite_routes, user_routes, notification_routes
+    forum_media_routes, favourite_routes, user_routes, notification_routes, external_catalog_routes
 from app.models import user_favourite  # noqa: F401 — registers model with Base
 from app.models import notification_model  # noqa: F401 — registers Notification with Base
 
@@ -81,6 +81,7 @@ app.include_router(forum_media_routes.router)
 app.include_router(favourite_routes.router, prefix="/auth")
 app.include_router(user_routes.router)
 app.include_router(notification_routes.router)
+app.include_router(external_catalog_routes.router)
 
 # ✅ Run DB init on startup
 @app.on_event("startup")
@@ -129,6 +130,39 @@ async def on_startup():
                         """
                         ALTER TABLE IF EXISTS man_review.series
                         ADD COLUMN IF NOT EXISTS approved_at VARCHAR(40)
+                        """
+                    )
+                )
+                await conn.execute(
+                    text(
+                        """
+                        ALTER TABLE IF EXISTS man_review.series
+                        ADD COLUMN IF NOT EXISTS external_source VARCHAR
+                        """
+                    )
+                )
+                await conn.execute(
+                    text(
+                        """
+                        ALTER TABLE IF EXISTS man_review.series
+                        ADD COLUMN IF NOT EXISTS external_id VARCHAR
+                        """
+                    )
+                )
+                await conn.execute(
+                    text(
+                        """
+                        ALTER TABLE IF EXISTS man_review.series
+                        ADD COLUMN IF NOT EXISTS external_url VARCHAR
+                        """
+                    )
+                )
+                await conn.execute(
+                    text(
+                        """
+                        CREATE UNIQUE INDEX IF NOT EXISTS ux_series_external_source_id
+                        ON man_review.series (external_source, external_id)
+                        WHERE external_source IS NOT NULL AND external_id IS NOT NULL
                         """
                     )
                 )
