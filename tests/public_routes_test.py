@@ -141,5 +141,8 @@ def test_list_series_returns_approved_public_series():
             "vote_count": 12,
             "cover_url": "https://cdn.example.com/solo.jpg",
             "approval_status": "APPROVED",
+            "external_source": None,
+            "external_id": None,
+            "external_url": None,
         }
     ]
