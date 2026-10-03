@@ -165,12 +165,14 @@ def test_report_issue_rejects_invalid_issue_type():
 def test_list_issues_returns_matching_issues():
     issue = issue_object(title="Searchable report")
     session = FakeIssueSession([FakeExecuteResult(rows=[issue])])
-    cleanup = override_issues_db(session)
+    cleanup_db = override_issues_db(session)
+    cleanup_admin = override_issues_admin()
 
     try:
         response = client.get("/issues?q=searchable&type=BUG&status=OPEN")
     finally:
-        cleanup()
+        cleanup_admin()
+        cleanup_db()
 
     assert response.status_code == 200
     assert response.json()[0]["title"] == "Searchable report"
