@@ -129,6 +129,43 @@ query (
 }
 """
 
+_ANILIST_MEDIA_QUERY = """
+query ($id: Int!) {
+  Media(id: $id, type: MANGA) {
+    id
+    idMal
+    siteUrl
+    title {
+      english
+      romaji
+      native
+    }
+    synonyms
+    status
+    description(asHtml: false)
+    countryOfOrigin
+    genres
+    popularity
+    averageScore
+    coverImage {
+      extraLarge
+      large
+    }
+    bannerImage
+    staff(perPage: 10, sort: RELEVANCE) {
+      edges {
+        role
+        node {
+          name {
+            full
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
 
 def _clean_text(value: Optional[str]) -> str:
     if not value:
@@ -381,6 +418,36 @@ async def find_anilist_match_for_title(
         ):
             return candidate
     return None
+
+
+async def get_anilist_title(external_id: str) -> Optional[ExternalTitleCandidate]:
+    try:
+        media_id = int(external_id.strip())
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+    payload = {
+        "query": _ANILIST_MEDIA_QUERY,
+        "variables": {"id": media_id},
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": "ToonRanks external catalog import",
+    }
+    async with httpx.AsyncClient(timeout=15) as client:
+        response = await client.post(ANILIST_GRAPHQL_URL, json=payload, headers=headers)
+        response.raise_for_status()
+
+    data = response.json()
+    if data.get("errors"):
+        message = data["errors"][0].get("message") or "AniList title lookup failed"
+        raise httpx.HTTPStatusError(message, request=response.request, response=response)
+
+    media = (data.get("data") or {}).get("Media")
+    if not media:
+        return None
+    return normalize_anilist_media(media)
 
 
 async def discover_anilist_titles(

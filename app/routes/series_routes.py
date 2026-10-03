@@ -16,7 +16,11 @@ from urllib.parse import urlparse
 from fastapi import Query, HTTPException
 from app.deps.admin import require_admin, require_series_submitter, can_submit_series, is_admin
 from app.schemas.series_schemas import SeriesTypeEnum
-from app.utils.external_catalog import ExternalTitleCandidate, find_anilist_match_for_title
+from app.utils.external_catalog import (
+    ExternalTitleCandidate,
+    find_anilist_match_for_title,
+    get_anilist_title,
+)
 from app.utils.token_utils import get_current_user
 from datetime import datetime, timezone
 
@@ -83,6 +87,22 @@ async def _try_enrich_with_anilist(series: Series, session: AsyncSession) -> Non
         if await _external_metadata_in_use(session, candidate, series.id):
             return
         _apply_external_metadata(series, candidate)
+
+
+async def _refresh_imported_anilist_metadata(
+    series: Series,
+    session: AsyncSession,
+) -> None:
+    if (series.external_source or "").upper() != "ANILIST" or not series.external_id:
+        return
+    try:
+        candidate = await get_anilist_title(series.external_id)
+    except Exception as exc:
+        print(f"Warning: AniList refresh failed for {series.title!r}: {exc}")
+        return
+    if not candidate or await _external_metadata_in_use(session, candidate, series.id):
+        return
+    _apply_external_metadata(series, candidate)
 
 async def get_db():
     async with AsyncSessionLocal() as session:
@@ -366,6 +386,8 @@ async def approve_series(
             status_code=400,
             detail="Title details must be completed before approval"
         )
+
+    await _refresh_imported_anilist_metadata(series, db)
 
     series.approval_status = SeriesApprovalStatus.APPROVED.value
     series.approved_by_id = admin_user.id
