@@ -1,8 +1,9 @@
 from decimal import Decimal
-from typing import List, Optional
+from typing import List, Literal, Optional
+import httpx
 from sqlalchemy import select, and_, or_, delete
 
-from fastapi import APIRouter, UploadFile, File, Depends, Request, Form
+from fastapi import APIRouter, UploadFile, File, Depends, Request, Form, Response
 from sqlalchemy import cast, String
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import AsyncSessionLocal, get_async_session
@@ -22,6 +23,7 @@ from app.utils.external_catalog import (
     get_anilist_title,
 )
 from app.utils.token_utils import get_current_user
+from app.config import AWS_BUCKET_NAME, AWS_REGION
 from datetime import datetime, timezone
 
 
@@ -30,6 +32,64 @@ def extract_s3_key(cover_url: str) -> str:
     parsed = urlparse(cover_url)
     return parsed.path.lstrip("/")
 router = APIRouter()
+
+EDITOR_IMAGE_MAX_BYTES = 10 * 1024 * 1024
+EDITOR_IMAGE_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp"}
+
+
+def _can_edit_series(series: Series, current_user: User) -> bool:
+    is_owner_of_pending = (
+        can_submit_series(current_user)
+        and series.submitted_by_id == current_user.id
+        and series.approval_status != SeriesApprovalStatus.APPROVED.value
+    )
+    return is_admin(current_user) or is_owner_of_pending
+
+
+def _editor_image_host_allowed(url: str) -> bool:
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or parsed.username or parsed.password:
+        return False
+
+    hostname = (parsed.hostname or "").lower()
+    allowed_hosts = {"s4.anilist.co", "s.anilist.co"}
+    if AWS_BUCKET_NAME and AWS_REGION:
+        allowed_hosts.add(f"{AWS_BUCKET_NAME}.s3.{AWS_REGION}.amazonaws.com".lower())
+    return hostname in allowed_hosts and parsed.port in (None, 443)
+
+
+async def _download_editor_image(url: str) -> tuple[bytes, str]:
+    if not _editor_image_host_allowed(url):
+        raise HTTPException(status_code=422, detail="This cover source cannot be edited")
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as client:
+            response = await client.get(
+                url,
+                headers={"Accept": "image/webp,image/png,image/jpeg"},
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail="Could not load the current cover") from exc
+
+    if response.is_redirect or not response.is_success:
+        raise HTTPException(status_code=502, detail="Could not load the current cover")
+
+    content_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
+    if content_type not in EDITOR_IMAGE_CONTENT_TYPES:
+        raise HTTPException(status_code=422, detail="The current cover is not a supported image")
+
+    content_length = response.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > EDITOR_IMAGE_MAX_BYTES:
+                raise HTTPException(status_code=413, detail="The current cover is too large to edit")
+        except ValueError:
+            pass
+
+    content = response.content
+    if len(content) > EDITOR_IMAGE_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="The current cover is too large to edit")
+    return content, content_type
 
 
 def _series_type_enum(value) -> Optional[SeriesTypeEnum]:
@@ -200,12 +260,7 @@ async def update_series(
     if not series:
         raise HTTPException(status_code=404, detail="Series not found")
 
-    is_owner_of_pending = (
-        can_submit_series(current_user)
-        and series.submitted_by_id == current_user.id
-        and series.approval_status != SeriesApprovalStatus.APPROVED.value
-    )
-    if not (is_admin(current_user) or is_owner_of_pending):
+    if not _can_edit_series(series, current_user):
         raise HTTPException(
             status_code=403,
             detail="You cannot edit this title"
@@ -260,6 +315,39 @@ async def update_series(
     await session.commit()
     await session.refresh(series)
     return series
+
+
+@router.get("/series/{series_id}/editor-image")
+async def get_series_editor_image(
+    series_id: int,
+    kind: Literal["series", "detail"] = Query("series"),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_async_session),
+):
+    series = await session.scalar(select(Series).where(Series.id == series_id))
+    if not series:
+        raise HTTPException(status_code=404, detail="Series not found")
+    if not _can_edit_series(series, current_user):
+        raise HTTPException(status_code=403, detail="You cannot edit this title")
+
+    image_url = series.cover_url
+    if kind == "detail":
+        detail = await session.scalar(
+            select(SeriesDetail).where(SeriesDetail.series_id == series_id)
+        )
+        if not detail:
+            raise HTTPException(status_code=404, detail="Series details not found")
+        image_url = detail.series_cover_url
+
+    if not image_url:
+        raise HTTPException(status_code=404, detail="Cover image not found")
+
+    content, content_type = await _download_editor_image(image_url)
+    return Response(
+        content=content,
+        media_type=content_type,
+        headers={"Cache-Control": "private, max-age=300"},
+    )
 
 
 @router.get("/series/pending", response_model=list[PendingSeriesOut])

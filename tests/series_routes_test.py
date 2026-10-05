@@ -1,5 +1,9 @@
+import asyncio
 from types import SimpleNamespace
 
+import httpx
+import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -7,6 +11,136 @@ from app.models.series_model import SeriesStatus
 from app.routes import series_routes
 
 client = TestClient(app)
+
+
+def test_editor_image_host_allows_anilist_and_rejects_arbitrary_hosts():
+    assert series_routes._editor_image_host_allowed(
+        "https://s4.anilist.co/file/anilistcdn/media/manga/cover/large/example.jpg"
+    )
+    assert not series_routes._editor_image_host_allowed("http://s4.anilist.co/cover.jpg")
+    assert not series_routes._editor_image_host_allowed("https://example.com/cover.jpg")
+    assert not series_routes._editor_image_host_allowed(
+        "https://s4.anilist.co.example.com/cover.jpg"
+    )
+
+
+def test_download_editor_image_returns_supported_image(monkeypatch):
+    request = httpx.Request("GET", "https://s4.anilist.co/cover.jpg")
+    response = httpx.Response(
+        200,
+        request=request,
+        content=b"image-bytes",
+        headers={"content-type": "image/jpeg", "content-length": "11"},
+    )
+
+    class FakeAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, *_args, **_kwargs):
+            return response
+
+    monkeypatch.setattr(
+        series_routes.httpx,
+        "AsyncClient",
+        lambda **_kwargs: FakeAsyncClient(),
+    )
+
+    content, content_type = asyncio.run(
+        series_routes._download_editor_image("https://s4.anilist.co/cover.jpg")
+    )
+    assert content == b"image-bytes"
+    assert content_type == "image/jpeg"
+
+
+def test_download_editor_image_rejects_non_image(monkeypatch):
+    request = httpx.Request("GET", "https://s4.anilist.co/cover.jpg")
+    response = httpx.Response(
+        200,
+        request=request,
+        content=b"not-an-image",
+        headers={"content-type": "text/html"},
+    )
+
+    class FakeAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, *_args, **_kwargs):
+            return response
+
+    monkeypatch.setattr(
+        series_routes.httpx,
+        "AsyncClient",
+        lambda **_kwargs: FakeAsyncClient(),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            series_routes._download_editor_image("https://s4.anilist.co/cover.jpg")
+        )
+    assert exc_info.value.status_code == 422
+
+
+def test_get_series_editor_image_returns_existing_cover_for_admin(monkeypatch):
+    series = SimpleNamespace(
+        id=20,
+        cover_url="https://s4.anilist.co/cover.png",
+        submitted_by_id=None,
+        approval_status="APPROVED",
+    )
+
+    class FakeSession:
+        async def scalar(self, _stmt):
+            return series
+
+    async def fake_download(url):
+        assert url == series.cover_url
+        return b"cover-bytes", "image/png"
+
+    monkeypatch.setattr(series_routes, "_download_editor_image", fake_download)
+    response = asyncio.run(
+        series_routes.get_series_editor_image(
+            series_id=20,
+            kind="series",
+            current_user=SimpleNamespace(id=1, role="ADMIN"),
+            session=FakeSession(),
+        )
+    )
+
+    assert response.body == b"cover-bytes"
+    assert response.media_type == "image/png"
+    assert response.headers["cache-control"] == "private, max-age=300"
+
+
+def test_get_series_editor_image_rejects_unauthorized_user():
+    series = SimpleNamespace(
+        id=20,
+        cover_url="https://s4.anilist.co/cover.png",
+        submitted_by_id=None,
+        approval_status="APPROVED",
+    )
+
+    class FakeSession:
+        async def scalar(self, _stmt):
+            return series
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            series_routes.get_series_editor_image(
+                series_id=20,
+                kind="series",
+                current_user=SimpleNamespace(id=2, role="GENERAL"),
+                session=FakeSession(),
+            )
+        )
+    assert exc_info.value.status_code == 403
 
 
 class FakeRankingsResult:
