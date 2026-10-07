@@ -19,6 +19,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from app.database import AsyncSessionLocal, engine
 from app.models import reading_list as _reading_list  # noqa: F401
+from app.models import series_detail as _series_detail  # noqa: F401
 from app.models.series_model import Series, SeriesApprovalStatus
 from app.schemas.series_schemas import SeriesTypeEnum
 from app.utils.external_catalog import find_anilist_match_for_title, get_anilist_title

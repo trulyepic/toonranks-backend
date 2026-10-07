@@ -518,3 +518,36 @@ def test_reading_links_empty_when_anilist_has_none():
 
     assert reading_links_from_anilist({}) == []
     assert reading_links_from_anilist({"externalLinks": None}) == []
+
+
+def test_parse_where_to_read_validates_and_clears():
+    from fastapi import HTTPException
+
+    from app.routes.series_routes import _parse_where_to_read
+
+    assert _parse_where_to_read('[{"site": " Tapas ", "url": "https://tapas.io/x"}]') == [
+        {"site": "Tapas", "url": "https://tapas.io/x"}
+    ]
+    assert _parse_where_to_read("[]") is None
+    for bad in ["not json", '{"site": "x"}', '[{"site": "X", "url": "http://x.com"}]',
+                '[{"site": "", "url": "https://x.com"}]', '[{"site": "X", "url": "javascript:1"}]']:
+        with pytest.raises(HTTPException):
+            _parse_where_to_read(bad)
+
+
+def test_anilist_links_never_overwrite_existing_links():
+    from app.routes.series_routes import _apply_external_metadata
+
+    manual = [{"site": "Manual", "url": "https://example.com"}]
+    series = SimpleNamespace(where_to_read=manual)
+    cand = SimpleNamespace(
+        source="ANILIST", external_id="1", external_url="https://anilist.co/manga/1",
+        average_score=80, popularity=10,
+        reading_links=[{"site": "Tapas", "url": "https://tapas.io/x"}],
+    )
+    _apply_external_metadata(series, cand)
+    assert series.where_to_read == manual
+
+    empty = SimpleNamespace(where_to_read=None)
+    _apply_external_metadata(empty, cand)
+    assert empty.where_to_read == cand.reading_links
