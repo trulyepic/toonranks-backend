@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import httpx
@@ -11,6 +12,64 @@ from app.models.series_model import SeriesStatus
 from app.routes import series_routes
 
 client = TestClient(app)
+
+
+def make_submission(
+    *,
+    id: int,
+    approval_status: str,
+    approved_at: str | None,
+):
+    return SimpleNamespace(
+        id=id,
+        approval_status=approval_status,
+        approved_at=approved_at,
+    )
+
+
+def test_my_submissions_retains_unapproved_and_recent_approved_titles():
+    now = datetime(2026, 10, 6, 12, 0, tzinfo=timezone.utc)
+    rows = [
+        make_submission(id=4, approval_status="PENDING", approved_at=None),
+        make_submission(
+            id=3,
+            approval_status="APPROVED",
+            approved_at="2026-09-20T12:00:00+00:00",
+        ),
+        make_submission(
+            id=2,
+            approval_status="APPROVED",
+            approved_at="2026-09-06T12:00:00+00:00",
+        ),
+        make_submission(id=1, approval_status="DRAFT", approved_at=None),
+    ]
+
+    visible = series_routes._visible_my_submission_rows(rows, now=now)
+
+    assert [row.id for row in visible] == [4, 3, 1]
+
+
+def test_my_submissions_keeps_only_five_newest_approved_titles_without_dates():
+    rows = [
+        make_submission(id=id, approval_status="APPROVED", approved_at=None)
+        for id in range(10, 3, -1)
+    ]
+    rows.insert(3, make_submission(id=20, approval_status="PENDING", approved_at=None))
+
+    visible = series_routes._visible_my_submission_rows(rows)
+
+    assert [row.id for row in visible] == [10, 9, 8, 20, 7, 6]
+
+
+def test_my_submissions_treats_invalid_approval_dates_as_undated():
+    rows = [
+        make_submission(id=2, approval_status="APPROVED", approved_at="not-a-date"),
+        make_submission(id=1, approval_status="APPROVED", approved_at=""),
+    ]
+
+    visible = series_routes._visible_my_submission_rows(rows)
+
+    assert [row.id for row in visible] == [2, 1]
 
 
 def test_editor_image_host_allows_anilist_and_rejects_arbitrary_hosts():
