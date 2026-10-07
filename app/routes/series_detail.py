@@ -330,6 +330,7 @@ async def get_series_detail(
     response_data["external_score"] = series.external_score
     response_data["external_popularity"] = series.external_popularity
     response_data["external_synced_at"] = series.external_synced_at
+    response_data["where_to_read"] = series.where_to_read or []
 
     return JSONResponse(content=response_data)
 

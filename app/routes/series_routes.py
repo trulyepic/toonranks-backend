@@ -152,6 +152,7 @@ def _apply_external_metadata(series: Series, candidate: ExternalTitleCandidate) 
     series.external_url = candidate.external_url
     series.external_score = candidate.average_score
     series.external_popularity = candidate.popularity
+    series.where_to_read = candidate.reading_links or None
     series.external_synced_at = datetime.now(timezone.utc).isoformat()
 
 
@@ -161,6 +162,7 @@ def _clear_external_metadata(series: Series) -> None:
     series.external_url = None
     series.external_score = None
     series.external_popularity = None
+    series.where_to_read = None
     series.external_synced_at = None
 
 

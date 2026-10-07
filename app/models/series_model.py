@@ -1,5 +1,5 @@
 
-from sqlalchemy import Column, Integer, String, Enum as SqlEnum
+from sqlalchemy import JSON, Column, Integer, String, Enum as SqlEnum
 from sqlalchemy.orm import relationship
 from app.database import Base
 import enum
@@ -39,6 +39,8 @@ class Series(Base):
     external_score = Column(Integer, nullable=True)
     external_popularity = Column(Integer, nullable=True)
     external_synced_at = Column(String, nullable=True)
+    # [{"site": "Tapas", "url": "https://..."}] — official reading platforms
+    where_to_read = Column(JSON, nullable=True)
     approval_status = Column(String, nullable=False, default=SeriesApprovalStatus.APPROVED.value)
     submitted_by_id = Column(Integer, nullable=True)
     approved_by_id = Column(Integer, nullable=True)

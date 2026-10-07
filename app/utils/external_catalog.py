@@ -38,6 +38,7 @@ class ExternalTitleCandidate(BaseModel):
     popularity: Optional[int] = None
     average_score: Optional[int] = None
     title_aliases: list[str] = Field(default_factory=list)
+    reading_links: list[dict[str, str]] = Field(default_factory=list)
 
 
 _ANILIST_SEARCH_QUERY = """
@@ -64,6 +65,13 @@ query ($search: String!, $page: Int!, $perPage: Int!) {
         large
       }
       bannerImage
+      externalLinks {
+        url
+        site
+        type
+        language
+        isDisabled
+      }
       staff(perPage: 10, sort: RELEVANCE) {
         edges {
           role
@@ -114,6 +122,13 @@ query (
         large
       }
       bannerImage
+      externalLinks {
+        url
+        site
+        type
+        language
+        isDisabled
+      }
       staff(perPage: 10, sort: RELEVANCE) {
         edges {
           role
@@ -152,6 +167,13 @@ query ($id: Int!) {
       large
     }
     bannerImage
+    externalLinks {
+      url
+      site
+      type
+      language
+      isDisabled
+    }
     staff(perPage: 10, sort: RELEVANCE) {
       edges {
         role
@@ -329,6 +351,33 @@ def _staff_names(media: dict[str, Any], needles: set[str]) -> str:
     return ", ".join(names[:3])
 
 
+MAX_READING_LINKS = 6
+
+
+def reading_links_from_anilist(media: dict[str, Any]) -> list[dict[str, str]]:
+    """Official English reading platforms from AniList's externalLinks, one per site."""
+    links: list[dict[str, str]] = []
+    seen_sites: set[str] = set()
+    for link in media.get("externalLinks") or []:
+        if not isinstance(link, dict) or link.get("isDisabled"):
+            continue
+        if str(link.get("type") or "").upper() != "STREAMING":
+            continue
+        if str(link.get("language") or "").casefold() != "english":
+            continue
+        url = str(link.get("url") or "").strip()
+        site = str(link.get("site") or "").strip()
+        if not site or not url.startswith("https://"):
+            continue
+        if site.casefold() in seen_sites:
+            continue
+        seen_sites.add(site.casefold())
+        links.append({"site": site, "url": url})
+        if len(links) >= MAX_READING_LINKS:
+            break
+    return links
+
+
 def normalize_anilist_media(media: dict[str, Any]) -> Optional[ExternalTitleCandidate]:
     series_type = _type_from_country(media.get("countryOfOrigin"))
     if not series_type:
@@ -356,6 +405,7 @@ def normalize_anilist_media(media: dict[str, Any]) -> Optional[ExternalTitleCand
         popularity=media.get("popularity"),
         average_score=media.get("averageScore"),
         title_aliases=_title_aliases(media),
+        reading_links=reading_links_from_anilist(media),
     )
 
 

@@ -486,3 +486,35 @@ async def test_batch_import_rolls_back_when_every_candidate_is_duplicate(monkeyp
     assert session.added == []
     assert session.committed is False
     assert session.rolled_back is True
+
+
+def test_reading_links_keep_official_english_platforms_once_each():
+    from app.utils.external_catalog import reading_links_from_anilist
+
+    media = {
+        "externalLinks": [
+            {"url": "https://tapas.io/series/x", "site": "Tapas", "type": "STREAMING",
+             "language": "English", "isDisabled": False},
+            {"url": "https://tapas.io/series/x-dup", "site": "Tapas", "type": "STREAMING",
+             "language": "English", "isDisabled": False},
+            {"url": "https://page.kakao.com/x", "site": "KakaoPage", "type": "STREAMING",
+             "language": "Korean", "isDisabled": False},
+            {"url": "https://yenpress.com/x", "site": "Yen Press", "type": "INFO",
+             "language": "English", "isDisabled": False},
+            {"url": "https://manta.net/x", "site": "Manta", "type": "STREAMING",
+             "language": "English", "isDisabled": True},
+            {"url": "http://insecure.example/x", "site": "Insecure", "type": "STREAMING",
+             "language": "English", "isDisabled": False},
+        ]
+    }
+
+    assert reading_links_from_anilist(media) == [
+        {"site": "Tapas", "url": "https://tapas.io/series/x"}
+    ]
+
+
+def test_reading_links_empty_when_anilist_has_none():
+    from app.utils.external_catalog import reading_links_from_anilist
+
+    assert reading_links_from_anilist({}) == []
+    assert reading_links_from_anilist({"externalLinks": None}) == []
