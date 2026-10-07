@@ -24,7 +24,7 @@ from app.utils.external_catalog import (
 )
 from app.utils.token_utils import get_current_user
 from app.config import AWS_BUCKET_NAME, AWS_REGION
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 
 
@@ -35,6 +35,50 @@ router = APIRouter()
 
 EDITOR_IMAGE_MAX_BYTES = 10 * 1024 * 1024
 EDITOR_IMAGE_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp"}
+MY_SUBMISSION_APPROVED_RETENTION_DAYS = 30
+MY_SUBMISSION_UNDATED_APPROVED_LIMIT = 5
+
+
+def _parse_approved_at(value: str | None) -> datetime | None:
+    if not value:
+        return None
+
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _visible_my_submission_rows(
+    rows: list[Series],
+    *,
+    now: datetime | None = None,
+) -> list[Series]:
+    current_time = now or datetime.now(timezone.utc)
+    cutoff = current_time - timedelta(days=MY_SUBMISSION_APPROVED_RETENTION_DAYS)
+    visible_rows = []
+    undated_approved_count = 0
+
+    for row in rows:
+        if row.approval_status != SeriesApprovalStatus.APPROVED.value:
+            visible_rows.append(row)
+            continue
+
+        approved_at = _parse_approved_at(row.approved_at)
+        if approved_at is not None:
+            if approved_at > cutoff:
+                visible_rows.append(row)
+            continue
+
+        if undated_approved_count < MY_SUBMISSION_UNDATED_APPROVED_LIMIT:
+            visible_rows.append(row)
+            undated_approved_count += 1
+
+    return visible_rows
 
 
 def _can_edit_series(series: Series, current_user: User) -> bool:
@@ -414,7 +458,7 @@ async def list_my_submissions(
         .where(Series.submitted_by_id == current_user.id)
         .order_by(Series.id.desc())
     )
-    rows = result.scalars().all()
+    rows = _visible_my_submission_rows(list(result.scalars().all()))
     detail_map = {}
     if rows:
         detail_result = await db.execute(
