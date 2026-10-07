@@ -22,6 +22,7 @@ class SeriesDetailOut(BaseModel):
     external_score: Optional[int] = None
     external_popularity: Optional[int] = None
     external_synced_at: Optional[str] = None
+    where_to_read: List[Dict[str, str]] = []
 
     author: Optional[str] = None
     artist: Optional[str] = None
