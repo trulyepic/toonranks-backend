@@ -55,7 +55,7 @@ Legend: 🔓 public · 🔑 any authenticated user · 👤 contributor+ · 🛡�
 | GET | `/series/pending` | 🛡️ | List series in `PENDING` approval state. |
 | GET | `/series/submissions/mine` | 👤 | List the current user's own submissions (all statuses). |
 | POST | `/series/` | 👤 | Create a new series (multipart: fields + cover image). Starts in `DRAFT`. |
-| PUT | `/series/{series_id}` | 🔑* | Update series. *Admin: any series. Contributor: own pending series only. |
+| PUT | `/series/{series_id}` | 🔑* | Update series. *Admin: any series. Contributor: own pending series only. Optional `where_to_read` JSON form field (see DATA_MODEL.md). |
 | POST | `/series/{series_id}/approve` | 🛡️ | Approve a pending series (requires detail to be complete). |
 | DELETE | `/series/{series_id}` | 🛡️ | Delete a series and its S3 cover images. |
 
@@ -65,7 +65,7 @@ Legend: 🔓 public · 🔑 any authenticated user · 👤 contributor+ · 🛡�
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| GET | `/series-details/{series_id}` | 🔓* | Get detail page data (synopsis, ratings, vote scores). *Auth optional. |
+| GET | `/series-details/{series_id}` | 🔓* | Get detail page data (synopsis, ratings, vote scores, `where_to_read` links). *Auth optional. |
 | POST | `/series-details/` | 🔑* | Create or update synopsis + detail cover. *Admin or series owner (pre-approval). |
 | POST | `/series-details/{series_id}/vote` | 🔑 | Submit a rating (1–10) for one category. One vote per category per user. |
 | GET | `/series-details/me/votes` | 🔑 | Paginated list of series the current user has voted on, with scores. |

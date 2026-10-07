@@ -65,8 +65,23 @@ series
 | `submitted_by_id` | integer nullable FK → users | null for legacy data |
 | `approved_by_id` | integer nullable FK → users | admin who approved |
 | `approved_at` | varchar nullable | ISO 8601 timestamp string |
+| `where_to_read` | json nullable | `[{"site": "Tapas", "url": "https://..."}]` — official reading platforms, max 6 |
 
 Only `APPROVED` series appear in public rankings and searches.
+
+**`where_to_read` rules** (web, mobile and backend all rely on these):
+- Filled automatically from AniList `externalLinks` (English, `STREAMING`, not disabled,
+  https, one per site) during AniList enrichment/refresh — **only when the field is empty**.
+- Manual values sent by the editor (`where_to_read` JSON form field on `POST /series/` and
+  `PUT /series/{id}`) always win; sending `[]` clears it. Validated: https only, site ≤ 40
+  chars, ≤ 6 links.
+- Returned only by `GET /series-details/{id}` (empty list when none) — not by list/ranking
+  endpoints. Clients hide the "Where to read" card when the list is empty.
+- Existing titles were backfilled 2026-10-06 with `scripts/backfill_where_to_read.py`
+  (dry run by default, `--apply` to save). Titles still missing links:
+  `docs/WHERE_TO_READ_MISSING.md`.
+- Plain links, no affiliate tracking. Swapping in affiliate URLs later needs an FTC
+  disclosure on the page.
 
 ### `series_details`
 
