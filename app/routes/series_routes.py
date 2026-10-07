@@ -1,5 +1,7 @@
 from decimal import Decimal
 from typing import List, Literal, Optional
+import json
+
 import httpx
 from sqlalchemy import select, and_, or_, delete
 
@@ -37,6 +39,7 @@ EDITOR_IMAGE_MAX_BYTES = 10 * 1024 * 1024
 EDITOR_IMAGE_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp"}
 MY_SUBMISSION_APPROVED_RETENTION_DAYS = 30
 MY_SUBMISSION_UNDATED_APPROVED_LIMIT = 5
+MAX_WHERE_TO_READ_LINKS = 6
 
 
 def _parse_approved_at(value: str | None) -> datetime | None:
@@ -152,7 +155,8 @@ def _apply_external_metadata(series: Series, candidate: ExternalTitleCandidate) 
     series.external_url = candidate.external_url
     series.external_score = candidate.average_score
     series.external_popularity = candidate.popularity
-    series.where_to_read = candidate.reading_links or None
+    if candidate.reading_links and not series.where_to_read:
+        series.where_to_read = candidate.reading_links
     series.external_synced_at = datetime.now(timezone.utc).isoformat()
 
 
@@ -162,8 +166,33 @@ def _clear_external_metadata(series: Series) -> None:
     series.external_url = None
     series.external_score = None
     series.external_popularity = None
-    series.where_to_read = None
     series.external_synced_at = None
+
+
+def _parse_where_to_read(raw: Optional[str]) -> Optional[list[dict[str, str]]]:
+    """Validate a JSON list of {site, url} from a form field. Empty list clears."""
+    try:
+        items = json.loads(raw or "[]")
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=422, detail="Where to read must be a JSON list")
+    if not isinstance(items, list):
+        raise HTTPException(status_code=422, detail="Where to read must be a JSON list")
+    if len(items) > MAX_WHERE_TO_READ_LINKS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Add at most {MAX_WHERE_TO_READ_LINKS} Where to read links",
+        )
+    links: list[dict[str, str]] = []
+    for item in items:
+        site = str((item or {}).get("site") or "").strip() if isinstance(item, dict) else ""
+        url = str((item or {}).get("url") or "").strip() if isinstance(item, dict) else ""
+        parsed = urlparse(url)
+        if not site or len(site) > 40:
+            raise HTTPException(status_code=422, detail="Each link needs a site name (max 40)")
+        if parsed.scheme != "https" or not parsed.netloc or len(url) > 500:
+            raise HTTPException(status_code=422, detail=f"Invalid link for {site}: use https://")
+        links.append({"site": site, "url": url})
+    return links or None
 
 
 async def _external_metadata_in_use(
@@ -253,9 +282,11 @@ async def delete_series(
 async def create_series(
     series: SeriesCreate = Depends(SeriesCreate.as_form),
     cover: UploadFile = File(...),
+    where_to_read: Optional[str] = Form(None),
     current_user: User = Depends(require_series_submitter),
     db: AsyncSession = Depends(get_db)
 ):
+    manual_links = _parse_where_to_read(where_to_read) if where_to_read is not None else None
     image_url = upload_to_s3(cover.file, cover.filename, cover.content_type, folder=series.title)
 
     new_series = Series(
@@ -270,6 +301,7 @@ async def create_series(
         submitted_by_id=current_user.id,
         approved_by_id=None,
         approved_at=None,
+        where_to_read=manual_links,
     )
     await _try_enrich_with_anilist(new_series, db)
 
@@ -297,6 +329,7 @@ async def update_series(
     artist: Optional[str] = Form(None),
     status: Optional[str] = Form(None),
     cover: Optional[UploadFile] = File(None),
+    where_to_read: Optional[str] = Form(None),
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_async_session)
 ):
@@ -344,6 +377,10 @@ async def update_series(
         await _try_enrich_with_anilist(series, session)
     elif not series.external_source:
         await _try_enrich_with_anilist(series, session)
+
+    # Sent by the editor = the owner's explicit choice; it beats anything AniList filled.
+    if where_to_read is not None:
+        series.where_to_read = _parse_where_to_read(where_to_read)
 
     if cover is not None and cover.filename:
         if series.cover_url:
