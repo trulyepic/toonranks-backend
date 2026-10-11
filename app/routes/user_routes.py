@@ -15,6 +15,7 @@ from app.models.series_model import Series
 from app.models.reading_list import ReadingList, ReadingListItem
 from app.models.forum_model import ForumPost, ForumThread
 from app.models.user_vote import UserVote
+from app.utils.token_utils import get_current_user
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -154,9 +155,10 @@ async def get_leaderboard(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(get_current_user),
 ):
     """
-    Ranked list of Rankers ordered by cred_score descending.
+    Authenticated ranked list of Rankers ordered by cred_score descending.
     All non-admin users appear; new users with no activity (cred_score 0) sort to
     the bottom and climb as they participate. Admins are excluded from ranking.
     """
