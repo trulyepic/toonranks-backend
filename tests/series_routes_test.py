@@ -19,11 +19,13 @@ def make_submission(
     id: int,
     approval_status: str,
     approved_at: str | None,
+    submission_history_removed_at: str | None = None,
 ):
     return SimpleNamespace(
         id=id,
         approval_status=approval_status,
         approved_at=approved_at,
+        submission_history_removed_at=submission_history_removed_at,
     )
 
 
@@ -70,6 +72,125 @@ def test_my_submissions_treats_invalid_approval_dates_as_undated():
     visible = series_routes._visible_my_submission_rows(rows)
 
     assert [row.id for row in visible] == [2, 1]
+
+
+def test_my_submissions_excludes_manually_removed_approved_titles():
+    rows = [
+        make_submission(
+            id=2,
+            approval_status="APPROVED",
+            approved_at="2026-10-01T12:00:00+00:00",
+            submission_history_removed_at="2026-10-02T12:00:00+00:00",
+        ),
+        make_submission(
+            id=1,
+            approval_status="APPROVED",
+            approved_at="2026-10-01T12:00:00+00:00",
+        ),
+    ]
+
+    visible = series_routes._visible_my_submission_rows(rows)
+
+    assert [row.id for row in visible] == [1]
+
+
+class FakeRemovalResult:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def scalars(self):
+        return self
+
+    def all(self):
+        return self._rows
+
+
+class FakeRemovalSession:
+    def __init__(self, rows):
+        self._rows = rows
+        self.committed = False
+
+    async def execute(self, _statement):
+        return FakeRemovalResult(self._rows)
+
+    async def commit(self):
+        self.committed = True
+
+
+def test_admin_can_remove_owned_approved_titles_from_submission_history():
+    rows = [
+        SimpleNamespace(
+            id=3,
+            submitted_by_id=7,
+            approval_status="APPROVED",
+            submission_history_removed_at=None,
+        ),
+        SimpleNamespace(
+            id=5,
+            submitted_by_id=7,
+            approval_status="APPROVED",
+            submission_history_removed_at=None,
+        ),
+    ]
+    session = FakeRemovalSession(rows)
+
+    result = asyncio.run(
+        series_routes.remove_approved_submission_history(
+            series_routes.SubmissionHistoryRemoveRequest(series_ids=[3, 5, 3]),
+            admin_user=SimpleNamespace(id=7),
+            db=session,
+        )
+    )
+
+    assert result.removed_ids == [3, 5]
+    assert session.committed is True
+    assert all(row.submission_history_removed_at for row in rows)
+
+
+def test_admin_cannot_remove_pending_title_from_submission_history():
+    row = SimpleNamespace(
+        id=3,
+        submitted_by_id=7,
+        approval_status="PENDING",
+        submission_history_removed_at=None,
+    )
+    session = FakeRemovalSession([row])
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            series_routes.remove_approved_submission_history(
+                series_routes.SubmissionHistoryRemoveRequest(series_ids=[3]),
+                admin_user=SimpleNamespace(id=7),
+                db=session,
+            )
+        )
+
+    assert exc_info.value.status_code == 400
+    assert session.committed is False
+    assert row.submission_history_removed_at is None
+
+
+def test_admin_cannot_remove_another_submitters_history():
+    row = SimpleNamespace(
+        id=3,
+        submitted_by_id=99,
+        approval_status="APPROVED",
+        submission_history_removed_at=None,
+    )
+    session = FakeRemovalSession([row])
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            series_routes.remove_approved_submission_history(
+                series_routes.SubmissionHistoryRemoveRequest(series_ids=[3]),
+                admin_user=SimpleNamespace(id=7),
+                db=session,
+            )
+        )
+
+    assert exc_info.value.status_code == 404
+    assert session.committed is False
+    assert row.submission_history_removed_at is None
 
 
 def test_editor_image_host_allows_anilist_and_rejects_arbitrary_hosts():

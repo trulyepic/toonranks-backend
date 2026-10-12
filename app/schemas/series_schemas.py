@@ -78,3 +78,11 @@ class PendingSeriesOut(SeriesOut):
     approved_at: Optional[str] = None
     detail_ready: bool = False
 
+
+class SubmissionHistoryRemoveRequest(BaseModel):
+    series_ids: list[int]
+
+
+class SubmissionHistoryRemoveOut(BaseModel):
+    removed_ids: list[int]
+

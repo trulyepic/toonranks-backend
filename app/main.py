@@ -137,6 +137,14 @@ async def on_startup():
                     text(
                         """
                         ALTER TABLE IF EXISTS man_review.series
+                        ADD COLUMN IF NOT EXISTS submission_history_removed_at VARCHAR(40)
+                        """
+                    )
+                )
+                await conn.execute(
+                    text(
+                        """
+                        ALTER TABLE IF EXISTS man_review.series
                         ADD COLUMN IF NOT EXISTS external_source VARCHAR
                         """
                     )
