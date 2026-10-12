@@ -45,6 +45,7 @@ class Series(Base):
     submitted_by_id = Column(Integer, nullable=True)
     approved_by_id = Column(Integer, nullable=True)
     approved_at = Column(String, nullable=True)
+    submission_history_removed_at = Column(String, nullable=True)
 
     status = Column(
         SqlEnum(

@@ -13,7 +13,14 @@ from app.models.series_detail import SeriesDetail
 from app.models.series_model import Series, SeriesType, SeriesStatus, SeriesApprovalStatus
 from app.models.user_model import User
 from app.models.user_vote import UserVote
-from app.schemas.series_schemas import SeriesCreate, SeriesOut, RankedSeriesOut, PendingSeriesOut
+from app.schemas.series_schemas import (
+    PendingSeriesOut,
+    RankedSeriesOut,
+    SeriesCreate,
+    SeriesOut,
+    SubmissionHistoryRemoveOut,
+    SubmissionHistoryRemoveRequest,
+)
 from app.s3 import upload_to_s3, delete_from_s3
 from urllib.parse import urlparse
 from fastapi import Query, HTTPException
@@ -67,6 +74,9 @@ def _visible_my_submission_rows(
     undated_approved_count = 0
 
     for row in rows:
+        if getattr(row, "submission_history_removed_at", None):
+            continue
+
         if row.approval_status != SeriesApprovalStatus.APPROVED.value:
             visible_rows.append(row)
             continue
@@ -494,7 +504,10 @@ async def list_my_submissions(
 ):
     result = await db.execute(
         select(Series)
-        .where(Series.submitted_by_id == current_user.id)
+        .where(
+            Series.submitted_by_id == current_user.id,
+            Series.submission_history_removed_at.is_(None),
+        )
         .order_by(Series.id.desc())
     )
     rows = _visible_my_submission_rows(list(result.scalars().all()))
@@ -533,6 +546,48 @@ async def list_my_submissions(
             "detail_ready": detail_map.get(row.id, False),
         })
     return payload
+
+
+@router.post(
+    "/series/submissions/mine/remove",
+    response_model=SubmissionHistoryRemoveOut,
+)
+async def remove_approved_submission_history(
+    payload: SubmissionHistoryRemoveRequest,
+    admin_user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    series_ids = list(dict.fromkeys(payload.series_ids))
+    if not series_ids:
+        raise HTTPException(status_code=400, detail="Select at least one approved title")
+    if len(series_ids) > 100:
+        raise HTTPException(status_code=400, detail="Remove at most 100 titles at a time")
+
+    result = await db.execute(select(Series).where(Series.id.in_(series_ids)))
+    rows = list(result.scalars().all())
+    owned_by_id = {
+        row.id: row
+        for row in rows
+        if row.submitted_by_id == admin_user.id
+    }
+    if len(owned_by_id) != len(series_ids):
+        raise HTTPException(status_code=404, detail="Submission not found")
+
+    if any(
+        row.approval_status != SeriesApprovalStatus.APPROVED.value
+        for row in owned_by_id.values()
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Only approved titles can be removed from submission history",
+        )
+
+    removed_at = datetime.now(timezone.utc).isoformat()
+    for row in owned_by_id.values():
+        row.submission_history_removed_at = removed_at
+
+    await db.commit()
+    return SubmissionHistoryRemoveOut(removed_ids=series_ids)
 
 
 @router.post("/series/{series_id}/approve", response_model=SeriesOut)
