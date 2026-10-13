@@ -560,8 +560,6 @@ async def remove_approved_submission_history(
     series_ids = list(dict.fromkeys(payload.series_ids))
     if not series_ids:
         raise HTTPException(status_code=400, detail="Select at least one approved title")
-    if len(series_ids) > 100:
-        raise HTTPException(status_code=400, detail="Remove at most 100 titles at a time")
 
     result = await db.execute(select(Series).where(Series.id.in_(series_ids)))
     rows = list(result.scalars().all())

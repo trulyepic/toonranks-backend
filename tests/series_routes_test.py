@@ -147,6 +147,33 @@ def test_admin_can_remove_owned_approved_titles_from_submission_history():
     assert all(row.submission_history_removed_at for row in rows)
 
 
+def test_admin_can_remove_more_than_one_hundred_approved_titles_at_once():
+    rows = [
+        SimpleNamespace(
+            id=series_id,
+            submitted_by_id=7,
+            approval_status="APPROVED",
+            submission_history_removed_at=None,
+        )
+        for series_id in range(1, 205)
+    ]
+    session = FakeRemovalSession(rows)
+
+    result = asyncio.run(
+        series_routes.remove_approved_submission_history(
+            series_routes.SubmissionHistoryRemoveRequest(
+                series_ids=[row.id for row in rows]
+            ),
+            admin_user=SimpleNamespace(id=7),
+            db=session,
+        )
+    )
+
+    assert result.removed_ids == list(range(1, 205))
+    assert session.committed is True
+    assert all(row.submission_history_removed_at for row in rows)
+
+
 def test_admin_cannot_remove_pending_title_from_submission_history():
     row = SimpleNamespace(
         id=3,
